@@ -1,47 +1,78 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AR Graffiti Prototype</title>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    canvas { display: block; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AR Graffiti Firebase</title>
+<style>
+  body { margin: 0; overflow: hidden; }
+  canvas { display: block; }
 
-    /* Spray button */
-    #sprayBtn {
-      position: fixed;
-      bottom: 50px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 20px;
-      font-size: 18px;
-      border-radius: 50%;
-      background: red;
-      color: white;
-      border: none;
-      opacity: 0.8;
-    }
+  #sprayBtn {
+    position: fixed;
+    bottom: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 20px;
+    font-size: 18px;
+    border-radius: 50%;
+    background: red;
+    color: white;
+    border: none;
+    opacity: 0.8;
+    z-index: 1000;
+  }
 
-    /* Crosshair */
-    #crosshair {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      width: 20px;
-      height: 20px;
-      margin-left: -10px;
-      margin-top: -10px;
-      border: 2px solid red;
-      border-radius: 50%;
-      pointer-events: none;
-    }
-  </style>
+  #crosshair {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin-left: -10px;
+    margin-top: -10px;
+    border: 2px solid red;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  .ar-button {
+    position: fixed !important;
+    top: 20px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 1000 !important;
+  }
+</style>
 </head>
 <body>
-  <button id="sprayBtn">Spray</button>
-  <div id="crosshair"></div>
+<button id="sprayBtn">Spray</button>
+<div id="crosshair"></div>
 
-  <script type="module" src="main.js"></script>
+<!-- Firebase SDKs -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.4.0/firebase-app.js";
+  import { getFirestore, collection, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.4.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBCzRpUX5mexhGj5FzqEWKoFAdljNJdbHE",
+    authDomain: "surfaceless-firebase.firebaseapp.com",
+    projectId: "surfaceless-firebase",
+    storageBucket: "surfaceless-firebase.firebasestorage.app",
+    messagingSenderId: "91893983357",
+    appId: "1:91893983357:web:a823ba9f5874bede8b6914"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  window.firebaseDB = db; // expose db to main.js
+  window.firebaseAddDoc = addDoc;
+  window.firebaseCollection = collection;
+  window.firebaseOnSnapshot = onSnapshot;
+</script>
+
+<script type="module" src="main.js"></script>
 </body>
 </html>
