@@ -1,13 +1,13 @@
 {
-  "name": "ar-graffiti",
+  "name": "ar-graffiti-proto",
   "version": "1.0.0",
-  "main": "server.js",
-  "type": "module",
+  "description": "AR Graffiti multi-user cube test",
   "scripts": {
-    "start": "node server.js"
+    "start": "firebase serve",
+    "deploy": "firebase deploy --only hosting"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2"
+    "three": "^0.171.0",
+    "firebase": "^11.0.0"
   }
 }
