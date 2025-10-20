@@ -1,20 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AR Graffiti | Cube Placement Test</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-  <div id="ui">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SurfaceLess Test</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: black;
+        color: white;
+        font-family: monospace;
+      }
+      #clearBtn {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        z-index: 10;
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+        border: 1px solid white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
     <button id="clearBtn">Clear All</button>
-    <div id="status">Connecting...</div>
-  </div>
-
-  <canvas id="three-canvas"></canvas>
-
-  <!-- Main script -->
-  <script type="module" src="main.js"></script>
-</body>
+    <script type="module" src="./main.js"></script>
+  </body>
 </html>
