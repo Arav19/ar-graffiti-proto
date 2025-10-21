@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>SurfaceLess — 2D Floor Canvas (GPS AR)</title>
+  <title>SurfaceLess — Gyro Brush, Floor Canvas</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,20 +11,16 @@
     <button id="enableCameraBtn">Enable Camera</button>
     <select id="cameraSelect" style="display:none"></select>
     <button id="placeCanvasBtn" disabled>Place Canvas</button>
+    <button id="startDrawBtn" disabled>Start Drawing</button>
+    <button id="stopDrawBtn" style="display:none">Stop Drawing</button>
     <input id="colorPicker" type="color" value="#ffffff" title="Brush color" />
-    <input id="brushRange" type="range" min="1" max="48" value="10" />
+    <input id="brushRange" type="range" min="1" max="48" value="12" />
     <button id="clearBtn">Clear All</button>
     <div id="status">Ready</div>
   </div>
 
-  <!-- Camera video background (appended dynamically) -->
-
-  <!-- Three.js rendering canvas -->
+  <!-- camera video is appended dynamically -->
   <canvas id="three-canvas"></canvas>
-
-  <!-- top overlay canvas for UI (optional; pointer goes through to three-canvas raycasting) -->
-  <canvas id="overlay-canvas"></canvas>
-
   <script type="module" src="./main.js"></script>
 </body>
 </html>
