@@ -1,6 +1,6 @@
-// main.js - AR graffiti with a pinned 2D canvas + realtime Firebase sync
+// main.js
+// GPS-anchored 2D canvas drawing with touch, Firebase realtime sync, iOS camera fix
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
-import { ARButton } from "https://unpkg.com/three@0.171.0/examples/jsm/webxr/ARButton.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import {
   getDatabase,
@@ -8,9 +8,8 @@ import {
   push,
   set,
   onChildAdded,
-  onValue,
   onChildRemoved,
-  remove
+  onValue
 } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
 
 /* ===== FIREBASE CONFIG - your project ===== */
@@ -28,16 +27,27 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const planesRef = ref(db, "planes");
 
-/* ======= THREE / Renderer / Scene ======= */
+/* ===== UI Elements ===== */
+const enableCameraBtn = document.getElementById("enableCameraBtn");
+const placeCanvasBtn = document.getElementById("placeCanvasBtn");
+const clearBtn = document.getElementById("clearBtn");
+const statusEl = document.getElementById("status");
+const colorPicker = document.getElementById("colorPicker");
+const brushRange = document.getElementById("brushRange");
+
+let camVideo = null; // video element for camera background
+let camStream = null;
+
+/* ===== THREE setup ===== */
 const canvas = document.getElementById("three-canvas");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0); // transparent so video shows
 renderer.outputEncoding = THREE.sRGBEncoding;
-renderer.xr.enabled = false; // enable when AR session starts
 
 const scene = new THREE.Scene();
-scene.background = null; // camera feed or black
+scene.background = null;
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
 camera.position.set(0, 1.6, 0);
@@ -45,504 +55,420 @@ camera.position.set(0, 1.6, 0);
 const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
 scene.add(light);
 
-/* ===== UI ===== */
-const enterArBtn = document.getElementById("enterArBtn");
-const placePlaneBtn = document.getElementById("placePlaneBtn");
-const clearBtn = document.getElementById("clearBtn");
-const statusEl = document.getElementById("status");
-
-/* ===== Globals ===== */
-let xrSession = null;
-let xrRefSpace = null;
-let hitTestSource = null;
-let viewerSpace = null;
-let reticle = null;
-
-const planeObjects = new Map(); // planeId -> { mesh, canvas, ctx }
-let localPlaneId = null; // the plane this client created/owns (optional)
+/* ===== Globals: planes and strokes ===== */
+const planeObjects = new Map(); // planeId -> { mesh, meta, strokesListeners }
+let localPlacedPlaneId = null; // id of the plane this device placed (only if user placed)
+let activePlaneId = null; // plane currently selected for drawing
 let drawing = false;
-let currentStroke = null;
+let currentStrokeRef = null; // firebase ref path (string) for current stroke
+let strokePushInterval = null; // throttle timer
+let strokeLocalBuffer = []; // local points buffer to send in batches
 
-// Basic fallback video background element (for non-WebXR)
-let fallbackVideo = null;
-
-/* ===== Utility: get device location & heading ===== */
+/* ===== GPS + heading helpers ===== */
 function getCurrentPositionPromise() {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error("No geolocation"));
-    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
+    if (!navigator.geolocation) return reject(new Error("Geolocation not available"));
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
   });
+}
+
+// take N GPS samples (fast) and return average lat/lon/alt
+async function sampleAndAverageGPS(n = 5, delayMs = 250) {
+  const samples = [];
+  for (let i = 0; i < n; i++) {
+    try {
+      /* eslint-disable no-await-in-loop */
+      const pos = await getCurrentPositionPromise();
+      samples.push(pos.coords);
+      await new Promise(r => setTimeout(r, delayMs));
+    } catch (e) {
+      // continue; if we have none, throw later
+    }
+  }
+  if (samples.length === 0) throw new Error("No GPS samples");
+  const avg = samples.reduce((acc, s) => {
+    acc.lat += s.latitude;
+    acc.lon += s.longitude;
+    acc.alt += (s.altitude ?? 0);
+    return acc;
+  }, { lat: 0, lon: 0, alt: 0 });
+  avg.lat /= samples.length;
+  avg.lon /= samples.length;
+  avg.alt /= samples.length;
+  return avg;
 }
 
 let lastHeading = 0;
 function startHeadingWatcher() {
-  // Best-effort heading via DeviceOrientation; iOS needs permission
-  const handler = (ev) => {
-    if (ev.absolute === true || ev.alpha != null) {
-      lastHeading = ev.alpha || lastHeading;
+  function handle(e) {
+    if (e.alpha != null) {
+      lastHeading = e.alpha;
     }
-  };
-
+  }
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-    // iOS 13+ permission requirement
-    DeviceOrientationEvent.requestPermission?.().then((perm) => {
-      if (perm === "granted") window.addEventListener("deviceorientation", handler, true);
-    }).catch(()=>{/* ignore */});
+    DeviceOrientationEvent.requestPermission?.().then((p) => {
+      if (p === "granted") window.addEventListener("deviceorientation", handle, true);
+    }).catch(()=>{});
   } else {
-    window.addEventListener("deviceorientation", handler, true);
+    window.addEventListener("deviceorientation", handle, true);
   }
 }
 
-/* ===== Helpers for canvas-on-plane creation ===== */
-function createDrawingPlaneMesh(widthMeters = 2, heightMeters = 2, texWidth = 1024, texHeight = 1024) {
-  // Create HTML canvas and texture
-  const canvas2d = document.createElement("canvas");
-  canvas2d.width = texWidth;
-  canvas2d.height = texHeight;
-  const ctx = canvas2d.getContext("2d");
-  // initialize transparent background
-  ctx.clearRect(0, 0, texWidth, texHeight);
+// Convert lat/lon difference to meters (approx)
+function latLonToMetersDelta(lat0, lon0, lat1, lon1) {
+  const R = 6378137.0;
+  const dLat = (lat1 - lat0) * Math.PI / 180;
+  const dLon = (lon1 - lon0) * Math.PI / 180;
+  const meanLat = (lat0 + lat1) / 2 * Math.PI / 180;
+  const north = dLat * R;
+  const east = dLon * R * Math.cos(meanLat);
+  return { east, north };
+}
 
-  const texture = new THREE.CanvasTexture(canvas2d);
-  texture.encoding = THREE.sRGBEncoding;
-  texture.flipY = false;
+// Convert meter offsets (east,north) into local x,z based on device heading (degrees)
+// headingDeg: 0 means facing north ; we rotate so that when device faces north, north maps to -Z
+function metersToLocalXZ(east, north, headingDeg) {
+  const theta = -headingDeg * Math.PI / 180;
+  const x = east * Math.cos(theta) - north * Math.sin(theta);
+  const z = east * Math.sin(theta) + north * Math.cos(theta);
+  return { x, z: -z };
+}
+
+/* ===== Create a ground-locked drawing plane mesh with an HTML canvas texture ===== */
+function createDrawingPlaneMesh(widthMeters = 3, heightMeters = 3, texSize = 1024) {
+  const canvas2d = document.createElement("canvas");
+  canvas2d.width = texSize;
+  canvas2d.height = texSize;
+  const ctx = canvas2d.getContext("2d");
+  ctx.clearRect(0, 0, texSize, texSize);
+
+  const tex = new THREE.CanvasTexture(canvas2d);
+  tex.encoding = THREE.sRGBEncoding;
+  tex.flipY = false;
+  tex.anisotropy = 1;
 
   const geom = new THREE.PlaneGeometry(widthMeters, heightMeters);
   const mat = new THREE.MeshStandardMaterial({
-    map: texture,
+    map: tex,
     transparent: true,
     side: THREE.DoubleSide,
-    metalness: 0,
-    roughness: 1
+    roughness: 1,
+    metalness: 0
   });
-
   const mesh = new THREE.Mesh(geom, mat);
-  mesh.userData.canvas = canvas2d;
-  mesh.userData.ctx = ctx;
-  mesh.userData.texture = texture;
-  mesh.userData.w = texWidth;
-  mesh.userData.h = texHeight;
-
+  mesh.rotation.x = -Math.PI / 2; // flush to ground
+  mesh.userData = { canvas: canvas2d, ctx, tex, w: texSize, h: texSize, widthMeters, heightMeters };
   return mesh;
 }
 
-/* ===== Raycast helpers: find uv on plane for pointer events ===== */
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
-
-// Convert THREE.Intersection uv to canvas pixel coords
-function uvToCanvasXY(uv, mesh) {
+/* ===== Convert plane UV to canvas pixels ===== */
+function uvToPixel(uv, mesh) {
   const u = uv.x;
   const v = uv.y;
   const x = Math.round(u * mesh.userData.w);
-  const y = Math.round((1 - v) * mesh.userData.h); // v=0 bottom => y=height
+  const y = Math.round((1 - v) * mesh.userData.h);
   return { x, y };
 }
 
-/* ===== Firebase: handle planes and strokes ===== */
-
-/*
-Data structure:
-planes/
-  <planeId> : {
-    createdAt,
-    creatorId (optional),
-    arPose: {x,y,z,qx,qy,qz,qw}  // local AR pose when placed (if available)
-    lat, lon, alt, headingAtPlace // fallback geo info
-    widthMeters, heightMeters
-  }
-planes/<planeId>/strokes/
-  <strokeId> : {
-    color, width, createdAt,
-    points: [ {u, v}, {u,v}, ... ]  // normalized UV coords [0..1]
-  }
-*/
-
-function createRemotePlane(planeId, meta) {
-  if (planeObjects.has(planeId)) return;
-  const width = meta.widthMeters || 2;
-  const height = meta.heightMeters || 2;
-  const mesh = createDrawingPlaneMesh(width, height);
-  mesh.name = `plane-${planeId}`;
-
-  // set initial transform: either use arPose (local) or reproject from lat/lon
-  if (meta.arPose && renderer.xr.isPresenting) {
-    // place roughly at pose; note cross-device AR alignment WITHOUT anchors is not reliable.
-    mesh.position.set(meta.arPose.x, meta.arPose.y, meta.arPose.z);
-    mesh.quaternion.set(meta.arPose.qx, meta.arPose.qy, meta.arPose.qz, meta.arPose.qw);
-    mesh.scale.set(1,1,1);
-    scene.add(mesh);
-    planeObjects.set(planeId, { mesh, meta });
-  } else if (meta.lat != null && meta.lon != null) {
-    // reproject based on local GPS: best effort
-    getCurrentPositionPromise().then((pos) => {
-      const myLat = pos.coords.latitude;
-      const myLon = pos.coords.longitude;
-      // small-equirectangular approximation
-      const R = 6378137;
-      const dLat = (meta.lat - myLat) * Math.PI / 180;
-      const dLon = (meta.lon - myLon) * Math.PI / 180;
-      const north = dLat * R;
-      const east = dLon * R * Math.cos(((meta.lat + myLat)/2) * Math.PI/180);
-      // convert east/north to local x,z using heading
-      const theta = - (meta.headingAtPlace || 0) * Math.PI/180;
-      const x = east * Math.cos(theta) - north * Math.sin(theta);
-      const z = east * Math.sin(theta) + north * Math.cos(theta);
-      mesh.position.set(x, 0, -z); // approximate placement on ground
-      scene.add(mesh);
-      planeObjects.set(planeId, { mesh, meta });
-    }).catch(()=> {
-      // fallback place in front of camera
-      mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
-      scene.add(mesh);
-      planeObjects.set(planeId, { mesh, meta });
-    });
-  } else {
-    // fallback: put in front of camera
-    mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
-    scene.add(mesh);
-    planeObjects.set(planeId, { mesh, meta });
-  }
-
-  // listen for strokes under this plane
-  const strokesRef = ref(db, `planes/${planeId}/strokes`);
-  onChildAdded(strokesRef, (snap) => {
-    const s = snap.val();
-    if (!s) return;
-    drawStrokeOnPlane(planeId, s, false);
-  });
-}
-
-// draw stroke on plane canvas; if local==true, update texture; if remote==true, don't re-broadcast
-function drawStrokeOnPlane(planeId, stroke, local = false) {
-  const p = planeObjects.get(planeId);
-  if (!p) return;
-  const { mesh } = p;
+/* ===== Draw points into plane canvas locally ===== */
+function drawPointsOnPlaneLocal(planeId, points, colorHex, widthPx) {
+  const obj = planeObjects.get(planeId);
+  if (!obj) return;
+  const { mesh } = obj;
   const ctx = mesh.userData.ctx;
-  const w = mesh.userData.w;
-  const h = mesh.userData.h;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  ctx.strokeStyle = stroke.color || "#ffffff";
-  ctx.lineWidth = (stroke.width || 8);
+  ctx.strokeStyle = colorHex;
+  ctx.lineWidth = widthPx;
 
   ctx.beginPath();
-  const pts = stroke.points || [];
-  if (pts.length === 0) return;
-  for (let i = 0; i < pts.length; i++) {
-    const pt = pts[i];
-    const x = pt.u * w;
-    const y = (1 - pt.v) * h;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const px = Math.round(p.u * mesh.userData.w);
+    const py = Math.round((1 - p.v) * mesh.userData.h);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
   }
   ctx.stroke();
-  mesh.userData.texture.needsUpdate = true;
+  mesh.userData.tex.needsUpdate = true;
 }
 
-/* ===== Create plane flow (user places canvas) ===== */
+/* ======= Firebase: listen for remote planes and strokes ======= */
 
-async function placeNewPlaneAtPose(pose, optionalGeo) {
-  // pose: {position: {x,y,z}, orientation: {x,y,z,w}} in local XR coordinates
-  // optionalGeo: {lat,lon,alt,heading}
-  const planeMeta = {
-    createdAt: Date.now(),
-    widthMeters: 2.0,
-    heightMeters: 2.0,
-    arPose: pose ? {
-      x: pose.position.x,
-      y: pose.position.y,
-      z: pose.position.z,
-      qx: pose.orientation.x,
-      qy: pose.orientation.y,
-      qz: pose.orientation.z,
-      qw: pose.orientation.w
-    } : null,
-    lat: optionalGeo?.lat ?? null,
-    lon: optionalGeo?.lon ?? null,
-    alt: optionalGeo?.alt ?? null,
-    headingAtPlace: optionalGeo?.heading ?? null
-  };
-  // push plane meta to firebase
-  const newPlaneRef = push(planesRef);
-  await set(newPlaneRef, planeMeta);
-  localPlaneId = newPlaneRef.key;
-  statusEl.textContent = "Placed canvas — draw now";
-}
-
-/* ====== AR: reticle and hit-test logic ====== */
-function makeReticle() {
-  const geometry = new THREE.RingGeometry(0.12, 0.15, 32).rotateX(-Math.PI / 2);
-  const material = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.8, transparent: true });
-  const ring = new THREE.Mesh(geometry, material);
-  ring.matrixAutoUpdate = false;
-  ring.visible = false;
-  scene.add(ring);
-  return ring;
-}
-
-/* ====== Clipboard of firebase plane creation: listen for remote planes ====== */
 onChildAdded(planesRef, (snap) => {
   const id = snap.key;
   const meta = snap.val();
   if (!meta) return;
-  createRemotePlane(id, meta);
+  if (planeObjects.has(id)) return;
+  const width = meta.widthMeters || 3;
+  const height = meta.heightMeters || 3;
+  const mesh = createDrawingPlaneMesh(width, height);
+  mesh.name = `plane-${id}`;
+
+  // compute position using current device GPS + heading to reproject plane lat/lon -> local x,z
+  if (meta.lat != null && meta.lon != null) {
+    getCurrentPositionPromise().then((pos) => {
+      const myLat = pos.coords.latitude;
+      const myLon = pos.coords.longitude;
+      const { east, north } = latLonToMetersDelta(myLat, myLon, meta.lat, meta.lon);
+      const { x, z } = metersToLocalXZ(east, north, lastHeading || 0);
+      mesh.position.set(x, 0, z);
+      scene.add(mesh);
+      planeObjects.set(id, { mesh, meta, strokesListeners: new Map() });
+      listenForStrokesForPlane(id);
+    }).catch(() => {
+      // fallback: place in front
+      mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
+      scene.add(mesh);
+      planeObjects.set(id, { mesh, meta, strokesListeners: new Map() });
+      listenForStrokesForPlane(id);
+    });
+  } else {
+    // no geo: fallback in front
+    mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
+    scene.add(mesh);
+    planeObjects.set(id, { mesh, meta, strokesListeners: new Map() });
+    listenForStrokesForPlane(id);
+  }
 });
 
-// remove plane handler
 onChildRemoved(planesRef, (snap) => {
   const id = snap.key;
-  const p = planeObjects.get(id);
-  if (p) {
-    scene.remove(p.mesh);
+  const obj = planeObjects.get(id);
+  if (obj) {
+    scene.remove(obj.mesh);
+    // detach listeners if implemented
     planeObjects.delete(id);
   }
 });
 
-/* ====== Input: place plane with AR hit-test or fallback ====== */
-enterArBtn.addEventListener("click", async () => {
-  // try immersive-ar first
-  if (navigator.xr && navigator.xr.isSessionSupported) {
-    try {
-      const supported = await navigator.xr.isSessionSupported("immersive-ar");
-      if (supported) {
-        await startARSession();
-        return;
-      }
-    } catch (e) { /* continue to fallback */ }
-  }
-  // fallback: start camera background + allow placement at fixed distance and capture geo
-  startFallbackMode();
-});
+// Listen strokes for a plane and draw incoming points
+function listenForStrokesForPlane(planeId) {
+  const strokesRef = ref(db, `planes/${planeId}/strokes`);
+  onChildAdded(strokesRef, (strokeSnap) => {
+    const strokeId = strokeSnap.key;
+    const strokeMeta = strokeSnap.val();
+    if (!strokeMeta) return;
+    // draw existing points (if any) and listen for added points
+    const pointsRef = ref(db, `planes/${planeId}/strokes/${strokeId}/points`);
+    // attach onValue to pull current points then listen to new ones incrementally
+    onValue(pointsRef, (ptsSnap) => {
+      const ptsObj = ptsSnap.val();
+      if (!ptsObj) return;
+      // flatten to ordered array by push key order (not guaranteed sorted by time, but okay)
+      const arr = Object.values(ptsObj).map(p => ({ u: p.u, v: p.v }));
+      drawPointsOnPlaneLocal(planeId, arr, strokeMeta.color || "#ffffff", strokeMeta.width || 8);
+    });
+  });
+}
 
-placePlaneBtn.addEventListener("click", async () => {
-  // when user clicks Place Canvas in non-AR fallback OR after reticle appears in AR
-  if (renderer.xr.isPresenting && reticle && reticle.visible) {
-    // use reticle matrix to get pose
-    const m = new THREE.Matrix4().copy(reticle.matrix);
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    m.decompose(pos, quat, new THREE.Vector3());
-    // attach plane there
-    const geo = await tryGetGeo();
-    await placeNewPlaneAtPose({ position: pos, orientation: quat }, geo);
-    // createRemotePlane will be triggered by Firebase onChildAdded; but for immediate feedback create local plane too
-  } else {
-    // fallback placement: put in front of camera at 2.5m and record geo
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    const pos = camera.position.clone().add(forward.multiplyScalar(2.5));
-    const quat = camera.quaternion.clone();
-    const geo = await tryGetGeo();
-    await placeNewPlaneAtPose({ position: pos, orientation: quat }, geo);
-  }
-});
+/* ======= Place Canvas: sample GPS & create plane meta (no AR hit-test) ======= */
 
-clearBtn.addEventListener("click", async () => {
-  // WARNING: this removes all planes & strokes in DB
+placeCanvasBtn.addEventListener("click", async () => {
+  statusEl.textContent = "Sampling GPS (please hold still)...";
+  placeCanvasBtn.disabled = true;
   try {
-    await remove(planesRef);
-    planeObjects.forEach(p => scene.remove(p.mesh));
+    const avg = await sampleAndAverageGPS(5, 300);
+    // plane meta: lat/lon + heading + sizes
+    const meta = {
+      createdAt: Date.now(),
+      lat: avg.lat,
+      lon: avg.lon,
+      alt: avg.alt,
+      headingAtPlace: lastHeading || 0,
+      widthMeters: 3.0,
+      heightMeters: 3.0,
+      creator: "anonymous"
+    };
+    // push plane, firebase will trigger onChildAdded to render locally & remote
+    const newPlaneRef = push(planesRef);
+    await set(newPlaneRef, meta);
+    localPlacedPlaneId = newPlaneRef.key;
+    statusEl.textContent = "Canvas placed!";
+  } catch (err) {
+    console.warn("GPS sample failed:", err);
+    statusEl.textContent = "GPS failed. Try again.";
+  } finally {
+    placeCanvasBtn.disabled = false;
+  }
+});
+
+/* ======= Enable camera (iOS fix) ======= */
+enableCameraBtn.addEventListener("click", async () => {
+  enableCameraBtn.disabled = true;
+  statusEl.textContent = "Requesting camera permission...";
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    camVideo = document.createElement("video");
+    camVideo.id = "camVideo";
+    camVideo.autoplay = true;
+    camVideo.playsInline = true;
+    camVideo.muted = true;
+    camVideo.srcObject = camStream;
+    // append video behind canvas
+    document.body.appendChild(camVideo);
+    await camVideo.play(); // must be inside user gesture on iOS
+    statusEl.textContent = "Camera ready — place canvas";
+    placeCanvasBtn.disabled = false;
+    startHeadingWatcher();
+  } catch (err) {
+    console.error("Camera error:", err);
+    statusEl.textContent = "Camera permission denied or unavailable";
+    enableCameraBtn.disabled = false;
+  }
+});
+
+/* ======= Pointer drawing mapped to plane UV; stream points to Firebase ======= */
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+// helper: find plane intersect and uv
+function getPlaneIntersectAtPointer(clientX, clientY) {
+  pointer.x = (clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const meshes = [];
+  planeObjects.forEach((v) => {
+    meshes.push(v.mesh);
+  });
+  const hits = raycaster.intersectObjects(meshes, false);
+  if (hits.length === 0) return null;
+  return hits[0]; // contains uv and object
+}
+
+async function startStrokeForPlane(planeId, uv) {
+  // create stroke record under planes/<planeId>/strokes
+  const strokesRef = ref(db, `planes/${planeId}/strokes`);
+  const strokeRef = push(strokesRef);
+  const meta = {
+    color: colorPicker.value,
+    width: parseInt(brushRange.value, 10) || 8,
+    createdAt: Date.now(),
+    complete: false
+  };
+  await set(strokeRef, meta);
+  currentStrokeRef = strokeRef; // firebase ref object
+  // initial point
+  const firstPointRef = push(ref(db, `${strokeRef.toString().replace(/https?:\/\/[^/]+/,'')}/points`)); // workaround but not ideal
+  // Note: above conversion to path uses ref path; simpler approach below: use push with path built via database root ref
+  // We'll instead use push with a child ref:
+  const pointsRef = ref(db, `planes/${planeId}/strokes/${strokeRef.key}/points`);
+  await push(pointsRef, { u: uv.x, v: uv.y, t: Date.now() });
+  // start local buffer
+  strokeLocalBuffer = [{ u: uv.x, v: uv.y }];
+  // start streaming interval (send buffered points every 120ms)
+  strokePushInterval = setInterval(async () => {
+    if (strokeLocalBuffer.length === 0) return;
+    const buf = strokeLocalBuffer.splice(0, strokeLocalBuffer.length);
+    // push all points
+    for (const p of buf) {
+      await push(pointsRef, { u: p.u, v: p.v, t: Date.now() });
+    }
+  }, 120);
+  return { strokeRef, pointsRef };
+}
+
+async function appendPointToStroke(pointsRef, u, v) {
+  strokeLocalBuffer.push({ u, v });
+  // also draw incremental locally immediately
+  drawPointsOnPlaneLocal(activePlaneId, [{ u, v }], colorPicker.value, parseInt(brushRange.value, 10));
+}
+
+// pointer handlers
+canvas.addEventListener("pointerdown", async (ev) => {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+  const hit = getPlaneIntersectAtPointer(ev.clientX, ev.clientY);
+  if (!hit) return;
+  const planeMesh = hit.object;
+  const planeId = [...planeObjects.entries()].find(([id, val]) => val.mesh === planeMesh)?.[0];
+  if (!planeId) return;
+  activePlaneId = planeId;
+  drawing = true;
+  const uv = hit.uv;
+  // start stroke in Firebase
+  const { pointsRef } = await startStrokeForPlane(planeId, uv);
+  // store pointsRef for append
+  canvas._currentPointsRef = pointsRef;
+});
+
+canvas.addEventListener("pointermove", (ev) => {
+  if (!drawing || !activePlaneId) return;
+  const hit = getPlaneIntersectAtPointer(ev.clientX, ev.clientY);
+  if (!hit) return;
+  // only if same plane
+  const planeMesh = hit.object;
+  const planeId = [...planeObjects.entries()].find(([id, val]) => val.mesh === planeMesh)?.[0];
+  if (planeId !== activePlaneId) return;
+  const uv = hit.uv;
+  // append to buffer and draw locally
+  if (canvas._currentPointsRef) {
+    appendPointToStroke(canvas._currentPointsRef, uv.x, uv.y);
+  }
+});
+
+canvas.addEventListener("pointerup", async (ev) => {
+  if (!drawing || !activePlaneId) return;
+  drawing = false;
+  // flush buffer immediately
+  if (strokePushInterval) {
+    clearInterval(strokePushInterval);
+    strokePushInterval = null;
+  }
+  // push any remaining buffered points
+  if (canvas._currentPointsRef && strokeLocalBuffer.length > 0) {
+    const pointsRef = canvas._currentPointsRef;
+    const buf = strokeLocalBuffer.splice(0, strokeLocalBuffer.length);
+    for (const p of buf) {
+      await push(pointsRef, { u: p.u, v: p.v, t: Date.now() });
+    }
+  }
+  // mark stroke complete
+  // we cannot easily get strokeRef key from pointsRef path; we rely on client-side not needing to set complete flag
+  canvas._currentPointsRef = null;
+  activePlaneId = null;
+});
+
+/* ======= Clear All ======= */
+clearBtn.addEventListener("click", async () => {
+  // WARNING: clears all planes & strokes
+  try {
+    await set(ref(db, "planes"), null);
+    planeObjects.forEach((p) => scene.remove(p.mesh));
     planeObjects.clear();
     statusEl.textContent = "Cleared all planes";
   } catch (e) {
-    console.error(e);
+    console.error("Clear failed", e);
   }
 });
 
-async function tryGetGeo() {
-  try {
-    const pos = await getCurrentPositionPromise();
-    return {
-      lat: pos.coords.latitude,
-      lon: pos.coords.longitude,
-      alt: pos.coords.altitude ?? 0,
-      heading: lastHeading || 0
-    };
-  } catch (e) {
-    return null;
-  }
-}
-
-/* ======= XR Session Start/Loop/Hit-Test ======= */
-async function startARSession() {
-  try {
-    xrSession = await navigator.xr.requestSession("immersive-ar", { requiredFeatures: ["hit-test", "local-floor"], optionalFeatures: ["dom-overlay"], domOverlay: { root: document.body } });
-  } catch (err) {
-    console.error("XR request failed", err);
-    statusEl.textContent = "AR start failed";
-    return;
-  }
-
-  renderer.xr.enabled = true;
-  await renderer.xr.setSession(xrSession);
-  statusEl.textContent = "AR active — look around and tap 'Place Canvas' when reticle appears";
-
-  // create reticle if missing
-  if (!reticle) reticle = makeReticle();
-
-  // reference spaces
-  xrRefSpace = await xrSession.requestReferenceSpace("local-floor");
-  viewerSpace = await xrSession.requestReferenceSpace("viewer");
-
-  // hit-test source
-  const hitSource = await xrSession.requestHitTestSource({ space: viewerSpace });
-  hitTestSource = hitSource;
-
-  // events
-  xrSession.addEventListener("end", () => {
-    renderer.xr.enabled = false;
-    xrSession = null;
-    hitTestSource = null;
-    statusEl.textContent = "AR ended";
-    enterArBtn.style.display = "";
-    placePlaneBtn.style.display = "none";
-  });
-
-  // show place button
-  placePlaneBtn.style.display = "";
-
-  // start heading watcher
-  startHeadingWatcher();
-
-  // render loop (with frame's hit test)
-  renderer.setAnimationLoop((time, xrFrame) => {
-    if (xrFrame && hitTestSource) {
-      const hitResults = xrFrame.getHitTestResults(hitTestSource);
-      if (hitResults.length > 0) {
-        const hit = hitResults[0];
-        const pose = hit.getPose(xrRefSpace);
-        if (pose) {
-          // put reticle at hit pose
-          reticle.visible = true;
-          const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-          reticle.matrix.copy(m);
-        }
-      } else {
-        reticle.visible = false;
-      }
-    }
-    renderer.render(scene, camera);
-  });
-}
-
-/* ======= Fallback: camera background + click placement ======= */
-async function startFallbackMode() {
-  // show place button
-  placePlaneBtn.style.display = "";
-
-  // request camera
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
-    fallbackVideo = document.createElement("video");
-    fallbackVideo.autoplay = true;
-    fallbackVideo.playsInline = true;
-    fallbackVideo.srcObject = stream;
-    fallbackVideo.style.position = "fixed";
-    fallbackVideo.style.left = "0";
-    fallbackVideo.style.top = "0";
-    fallbackVideo.style.width = "100%";
-    fallbackVideo.style.height = "100%";
-    fallbackVideo.style.objectFit = "cover";
-    fallbackVideo.style.zIndex = "-1";
-    document.body.appendChild(fallbackVideo);
-    statusEl.textContent = "Fallback camera active — press 'Place Canvas' to create canvas and draw";
-    startHeadingWatcher();
-  } catch (err) {
-    console.warn("Camera fallback failed", err);
-    statusEl.textContent = "Camera required for fallback";
-  }
-}
-
-/* ======= Pointer / drawing interactions ======= */
-
-// When a plane is available (localPlaneId or remote ones), enable pointer events to draw into whichever plane is tapped on.
-// We'll support: tap plane to select, then drawing with pointerdown/move/up
-
-let activePlaneId = null;
-
-renderer.domElement.addEventListener("pointerdown", async (ev) => {
-  // find intersection with any plane mesh
-  pointer.x = (ev.clientX / window.innerWidth) * 2 - 1;
-  pointer.y = -(ev.clientY / window.innerHeight) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-
-  // gather plane meshes
-  const meshes = [];
-  planeObjects.forEach((v, k) => {
-    if (v && v.mesh) meshes.push(v.mesh);
-  });
-
-  const intersects = raycaster.intersectObjects(meshes, false);
-  if (intersects.length > 0) {
-    const hit = intersects[0];
-    const mesh = hit.object;
-    // pick this plane as active
-    const planeId = [...planeObjects.entries()].find(([id, val]) => val.mesh === mesh)?.[0];
-    if (!planeId) return;
-    activePlaneId = planeId;
-
-    // start stroke with normalized uv
-    const uv = hit.uv;
-    const { x, y } = uvToCanvasXY(uv, mesh);
-    currentStroke = {
-      color: "#ffffff",
-      width: 8,
-      points: [{ u: uv.x, v: uv.y }]
-    };
-    drawing = true;
-    // draw first instant locally
-    drawStrokeOnPlane(planeId, currentStroke, true);
-  } else {
-    // not hitting plane: ignore (or place new plane if user has local ownership)
-  }
-});
-
-renderer.domElement.addEventListener("pointermove", (ev) => {
-  if (!drawing || !activePlaneId || !currentStroke) return;
-  pointer.x = (ev.clientX / window.innerWidth) * 2 - 1;
-  pointer.y = -(ev.clientY / window.innerHeight) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const mesh = planeObjects.get(activePlaneId).mesh;
-  const inter = raycaster.intersectObject(mesh, false);
-  if (inter.length === 0) return;
-  const uv = inter[0].uv;
-  currentStroke.points.push({ u: uv.x, v: uv.y });
-  // draw incremental
-  drawStrokeOnPlane(activePlaneId, { color: currentStroke.color, width: currentStroke.width, points: [currentStroke.points[currentStroke.points.length-2], currentStroke.points[currentStroke.points.length-1]] }, true);
-});
-
-renderer.domElement.addEventListener("pointerup", async (ev) => {
-  if (!drawing || !activePlaneId || !currentStroke) return;
-  drawing = false;
-  // broadcast stroke to Firebase under the activePlaneId
-  const strokesRef = ref(db, `planes/${activePlaneId}/strokes`);
-  // push stroke record
-  await push(strokesRef, {
-    color: currentStroke.color,
-    width: currentStroke.width,
-    createdAt: Date.now(),
-    points: currentStroke.points
-  });
-  currentStroke = null;
-});
-
-/* ======= Initial render loop to show scene even if not in AR ======= */
-function renderLoop() {
-  requestAnimationFrame(renderLoop);
-  // small animation: rotate visible plane meshes slightly for life (optional)
-  planeObjects.forEach((p) => {
-    // no rotation in AR; keep static
-  });
+/* ======= Render loop ======= */
+function animate() {
+  requestAnimationFrame(animate);
+  // optional: orient/scale plane meshes based on camera distance or smoothing
   renderer.render(scene, camera);
 }
-renderLoop();
+animate();
 
-/* ======= Start a small initialization: load existing planes (handled via onChildAdded) ======= */
-statusEl.textContent = "Ready — press Enter AR";
+/* ======= Window resize ======= */
+window.addEventListener("resize", () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
 
-/* ===== Notes & Limitations =====
- - This implementation creates a canvas texture per plane and syncs strokes (arrays of UV points).
- - On AR devices, we save arPose at creation time but **do not** implement a robust cross-device anchor system (that requires AR Cloud / VPS or cloud anchors).
- - Fallback uses camera feed + geo info; re-projection is approximate.
- - For production, optimize stroke payloads (chunk points), add authentication, and tighten DB rules.
-======================================== */
+/* ======= Startup ======= */
+statusEl.textContent = "Tap 'Enable Camera' then 'Place Canvas' to create floor canvas. Others will see it anchored by GPS.";
+
+/* ======= Notes & Limitations =======
+- This implementation anchors a planar canvas to (lat, lon) with width/height in meters.
+- When placing, we average several GPS samples for better accuracy.
+- Other devices reprojection: convert lat/lon -> east/north meters relative to their current position then rotate using device heading. That yields meter-level alignment (GPS-limited).
+- We stream stroke points to Firebase in small batches to create live drawing updates.
+- For high-precision persistent anchors across many users/time, integrate AR Cloud (Lightship or Cloud Anchors).
+- DB structure:
+  planes/
+    <planeId> : { lat, lon, widthMeters, heightMeters, headingAtPlace, createdAt }
+    planes/<planeId>/strokes/<strokeId>/points/: {u, v, t}
+============================================ */
 
