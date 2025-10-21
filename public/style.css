@@ -4,6 +4,7 @@ html,body {
   background: #000;
   color: #fff;
   font-family: Inter, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -11,25 +12,22 @@ html,body {
   position: fixed;
   top: 10px;
   left: 10px;
-  z-index: 20;
+  z-index: 40;
   display: flex;
-  align-items: center;
   gap: 8px;
+  align-items: center;
   background: rgba(0,0,0,0.25);
   padding: 8px;
-  border-radius: 8px;
+  border-radius: 10px;
 }
-#ui button, #ui input[type="color"], #ui input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  border: none;
+#ui button, #ui select, #ui input[type="color"], #ui input[type="range"] {
   background: rgba(255,255,255,0.06);
   color: #fff;
-  padding: 6px 8px;
+  border: none;
   border-radius: 6px;
+  padding: 6px 8px;
 }
-#status { font-size: 13px; opacity: 0.9; padding-left: 6px; min-width: 160px; }
-canvas#three-canvas { width: 100%; height: 100%; display: block; }
+#status { font-size: 13px; opacity: 0.95; min-width: 190px; margin-left: 6px; }
 video#camVideo {
   position: fixed;
   left: 0;
@@ -38,5 +36,18 @@ video#camVideo {
   height: 100%;
   object-fit: cover;
   z-index: 0;
+  background: black;
 }
-canvas#three-canvas { position: fixed; left:0; top:0; z-index: 1; pointer-events: auto; }
+canvas#three-canvas {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1;
+}
+canvas#overlay-canvas {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 45;
+  pointer-events: none; /* we use pointer events on three-canvas for raycasting */
+}
