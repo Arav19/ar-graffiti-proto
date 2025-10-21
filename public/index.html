@@ -1,26 +1,100 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>SurfaceLess — Gyro Brush, Floor Canvas</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Surfaceless AR Graffiti</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: black;
+      touch-action: none;
+      height: 100%;
+      width: 100%;
+    }
+
+    #ar-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    video#camera-feed {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0;
+      background: black;
+    }
+
+    canvas#three-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    #ui {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: white;
+      font-family: monospace;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    #status {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: white;
+      font-family: monospace;
+      z-index: 5;
+    }
+  </style>
 </head>
+
 <body>
-  <div id="ui">
-    <button id="enableCameraBtn">Enable Camera</button>
-    <select id="cameraSelect" style="display:none"></select>
-    <button id="placeCanvasBtn" disabled>Place Canvas</button>
-    <button id="startDrawBtn" disabled>Start Drawing</button>
-    <button id="stopDrawBtn" style="display:none">Stop Drawing</button>
-    <input id="colorPicker" type="color" value="#ffffff" title="Brush color" />
-    <input id="brushRange" type="range" min="1" max="48" value="12" />
-    <button id="clearBtn">Clear All</button>
-    <div id="status">Ready</div>
+  <div id="ar-container">
+    <video id="camera-feed" autoplay playsinline></video>
+    <canvas id="three-canvas"></canvas>
+
+    <div id="ui">
+      <button id="startBtn">Start Drawing</button>
+      <button id="stopBtn">Stop Drawing</button>
+      <button id="clearBtn">Clear All</button>
+    </div>
+
+    <div id="status">Initializing...</div>
   </div>
 
-  <!-- camera video is appended dynamically -->
-  <canvas id="three-canvas"></canvas>
+  <!-- Import main logic -->
   <script type="module" src="./main.js"></script>
 </body>
 </html>
