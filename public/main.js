@@ -230,20 +230,6 @@ function drawSegmentOnPlaneMesh(mesh, pts, color, widthPx){
   mesh.userData.tex.needsUpdate = true;
 }
 
-/* helper convert world XZ to plane normalized UV given plane meta (placed lat/lon -> mesh position) */
-/* but we store and stream strokes as UV coordinates relative to plane texture for portability */
-function worldToPlaneUV(mesh, worldPos){
-  // convert worldPos (Vector3) into mesh local coordinates
-  const local = worldPos.clone();
-  mesh.worldToLocal(local);
-  // plane is widthMeters x heightMeters centered
-  const halfW = mesh.userData.widthMeters / 2;
-  const halfH = mesh.userData.heightMeters / 2;
-  const u = (local.x + halfW) / (mesh.userData.widthMeters);
-  const v = (local.z + halfH) / (mesh.userData.heightMeters); // since plane rotated, z corresponds to v
-  return { u: THREE.MathUtils.clamp(u,0,1), v: THREE.MathUtils.clamp(1 - v,0,1) }; // v flip so uv maps as earlier
-}
-
 /* ====== Firebase stroke streaming: create stroke node and push points in batches ====== */
 async function createStrokeForPlane(planeId, color, width){
   const strokesRef = ref(db, `planes/${planeId}/strokes`);
