@@ -1,6 +1,5 @@
 // public/main.js
-// Flat-floor AR graffiti with press-and-hold spray + Firebase realtime sync
-// Uses THREE r0.171 and Firebase JS modular 11.x
+// Flat-floor AR graffiti with press-hold spray + Firebase realtime sync
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import {
@@ -13,7 +12,7 @@ import {
   onValue
 } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
 
-/* ===== FIREBASE CONFIG (your project) ===== */
+/* ===== FIREBASE CONFIG (use your existing config) ===== */
 const firebaseConfig = {
   apiKey: "AIzaSyBCzRpUX5mexhGj5FzqEWKoFAdljNJdbHE",
   authDomain: "surfaceless-firebase.firebaseapp.com",
@@ -27,14 +26,16 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const planesRef = ref(db, "planes");
 
-/* ===== Prevent double execution via extension injection ===== */
+/* ===== Prevent double execution (extensions/hmr) ===== */
 if (window.__surfaceless_main_loaded) {
-  console.warn("main.js already executed; skipping re-run.");
+  console.warn("main.js already executed — skipping");
 } else {
   window.__surfaceless_main_loaded = true;
 
   window.addEventListener("DOMContentLoaded", () => {
-    // DOM
+    console.log("DOM loaded — starting app bootstrap");
+
+    /* ===== DOM elements (must match index.html) ===== */
     const enableCameraBtn = document.getElementById("enableCameraBtn");
     const cameraSelect = document.getElementById("cameraSelect");
     const placeCanvasBtn = document.getElementById("placeCanvasBtn");
@@ -46,23 +47,22 @@ if (window.__surfaceless_main_loaded) {
     const videoEl = document.getElementById("camera-feed");
     const canvasEl = document.getElementById("three-canvas");
 
-    // Basic checks
     if (!canvasEl) {
-      console.error("three-canvas not found");
-      if (statusEl) statusEl.textContent = "Error: missing canvas";
+      console.error("Missing #three-canvas in HTML");
+      if (statusEl) statusEl.textContent = "UI error: canvas missing";
       return;
     }
 
     // initial UI state
-    if (statusEl) statusEl.textContent = "Ready — enable camera, place canvas";
+    statusEl && (statusEl.textContent = "Ready — enable camera, place canvas");
     hintEl && (hintEl.style.display = '');
 
-    // Camera state
+    /* ===== Camera state ===== */
     let camVideo = videoEl || null;
     let camStream = null;
     let chosenDeviceId = null;
 
-    // Three.js setup
+    /* ===== THREE setup ===== */
     const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -78,74 +78,59 @@ if (window.__surfaceless_main_loaded) {
     const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
     scene.add(hemi);
 
-    // Reticle & glowing crosshair
-    function makeReticle(radius = 0.15) {
-      const geo = new THREE.RingGeometry(radius * 0.85, radius, 32).rotateX(-Math.PI / 2);
+    /* ===== Reticle & crosshair ===== */
+    function makeReticle(r = 0.15) {
+      const geo = new THREE.RingGeometry(r * 0.85, r, 32).rotateX(-Math.PI / 2);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.95 });
-      const r = new THREE.Mesh(geo, mat);
-      r.visible = false;
-      scene.add(r);
-      return r;
+      const m = new THREE.Mesh(geo, mat); m.visible = false; scene.add(m); return m;
     }
-    function makeCross(radius = 0.06) {
-      const geo = new THREE.CircleGeometry(radius, 24).rotateX(-Math.PI / 2);
+    function makeCross(r = 0.06) {
+      const geo = new THREE.CircleGeometry(r, 24).rotateX(-Math.PI / 2);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00ffd0, transparent: true, opacity: 0.45 });
-      const m = new THREE.Mesh(geo, mat);
-      m.visible = false;
-      scene.add(m);
-      return m;
+      const m = new THREE.Mesh(geo, mat); m.visible = false; scene.add(m); return m;
     }
-
     const reticle = makeReticle(0.18);
     const crosshair = makeCross(0.06);
 
-    // Floor plane (drawing plane)
+    /* ===== Drawing plane (canvas texture) ===== */
     function createDrawingPlaneMesh(widthMeters = 3, heightMeters = 3, texSize = 2048) {
       const c = document.createElement("canvas");
       c.width = texSize; c.height = texSize;
       const ctx = c.getContext("2d");
       ctx.clearRect(0, 0, texSize, texSize);
-      // subtle grid background for texture
-      ctx.fillStyle = "rgba(0,0,0,0)";
-      ctx.fillRect(0, 0, texSize, texSize);
-
+      // transparent background — strokes will be painted on it
       const tex = new THREE.CanvasTexture(c);
       tex.encoding = THREE.sRGBEncoding;
       tex.flipY = false;
-
       const geom = new THREE.PlaneGeometry(widthMeters, heightMeters);
       const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, roughness: 1, metalness: 0 });
       const mesh = new THREE.Mesh(geom, mat);
-      mesh.rotation.x = -Math.PI / 2; // flat
+      mesh.rotation.x = -Math.PI / 2;
       mesh.position.y = 0;
       mesh.userData = { canvas: c, ctx, tex, w: texSize, h: texSize, widthMeters, heightMeters };
       return mesh;
     }
 
-    // Grid helper overlay (visualization)
+    /* ===== Grid overlay helper (visualization) ===== */
     function makeGridMesh(size = 3, divisions = 12) {
       const g = new THREE.GridHelper(size, divisions, 0x999999, 0x333333);
-      g.material.opacity = 0.35;
-      g.material.transparent = true;
-      g.rotation.x = -Math.PI / 2; // already grid lies in xz but ensure orientation
-      g.position.y = 0.001; // slightly above plane to avoid z-fighting
+      g.material.opacity = 0.35; g.material.transparent = true; g.rotation.x = -Math.PI / 2; g.position.y = 0.002;
       return g;
     }
 
-    // State
-    const planeObjects = new Map();
+    /* ===== State ===== */
+    const planeObjects = new Map(); // planeId -> {mesh,meta,grid}
     let localPlacedPlaneId = null;
     let localPlaneMesh = null;
     let localGrid = null;
 
-    // Drawing state
-    let spraying = false; // press and hold state
+    let spraying = false;
     let samplingTimer = null;
     let strokeBuffer = [];
     let currentStrokeId = null;
     let lastSamplePoint = null;
 
-    // Device orientation -> camera quaternion helper
+    /* ===== DeviceOrientation helpers (set camera quaternion) ===== */
     const zee = new THREE.Vector3(0, 0, 1);
     const euler = new THREE.Euler();
     const q0 = new THREE.Quaternion();
@@ -169,16 +154,18 @@ if (window.__surfaceless_main_loaded) {
     }
     function startOrientationWatcher() {
       if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-        DeviceOrientationEvent.requestPermission?.().then(p => { if (p === "granted") window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true); }).catch(()=>{});
+        // requestPermission must be called in a user gesture; we'll call it from Enable Cam button
+        DeviceOrientationEvent.requestPermission?.().then(p => {
+          if (p === "granted") window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
+        }).catch(()=>{ /* ignore */});
       } else {
         window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
       }
     }
 
-    // Ray from camera center -> intersect floor y=0
+    /* ===== Reticle ray -> floor (y=0) intersection ===== */
     function computeReticlePointOnFloor() {
-      const origin = new THREE.Vector3();
-      camera.getWorldPosition(origin);
+      const origin = new THREE.Vector3(); camera.getWorldPosition(origin);
       const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
       if (Math.abs(dir.y) < 1e-6) return null;
       const t = - origin.y / dir.y;
@@ -186,7 +173,7 @@ if (window.__surfaceless_main_loaded) {
       return origin.clone().add(dir.multiplyScalar(t));
     }
 
-    // Draw on mesh texture: spray as filled circles (gives spray look and allows thickness)
+    /* ===== Painting primitives (small circles on canvas texture) ===== */
     function paintCircleOnMesh(mesh, u, v, color, radiusPx) {
       if (!mesh || !mesh.userData || !mesh.userData.ctx) return;
       const ctx = mesh.userData.ctx;
@@ -199,7 +186,6 @@ if (window.__surfaceless_main_loaded) {
       mesh.userData.tex.needsUpdate = true;
     }
 
-    // Map world pos -> plane UV (relative to mesh center)
     function worldToPlaneUV(mesh, worldPos) {
       const local = worldPos.clone();
       mesh.worldToLocal(local);
@@ -210,7 +196,7 @@ if (window.__surfaceless_main_loaded) {
       return { u: THREE.MathUtils.clamp(u, 0, 1), v: THREE.MathUtils.clamp(1 - v, 0, 1) };
     }
 
-    /* ======= Firebase stroke helpers (create stroke, push points in batches) ======= */
+    /* ===== Firebase stroke helpers ===== */
     async function createStrokeForPlane(planeId, color, width) {
       const strokesRef = ref(db, `planes/${planeId}/strokes`);
       const strokeRef = push(strokesRef);
@@ -219,12 +205,10 @@ if (window.__surfaceless_main_loaded) {
     }
     async function pushPointsForStroke(planeId, strokeId, points) {
       const pointsRefPath = `planes/${planeId}/strokes/${strokeId}/points`;
-      for (const p of points) {
-        await push(ref(db, pointsRefPath), { u: p.u, v: p.v, t: Date.now() });
-      }
+      for (const p of points) await push(ref(db, pointsRefPath), { u: p.u, v: p.v, t: Date.now() });
     }
 
-    /* ======= Listen remote planes & strokes ======= */
+    /* ===== Listen remote planes & strokes ===== */
     function listenStrokesForPlane(planeId, mesh) {
       const strokesRef = ref(db, `planes/${planeId}/strokes`);
       onChildAdded(strokesRef, (sSnap) => {
@@ -232,36 +216,22 @@ if (window.__surfaceless_main_loaded) {
         const meta = sSnap.val();
         const ptsRef = ref(db, `planes/${planeId}/strokes/${strokeId}/points`);
         onValue(ptsRef, (ptsSnap) => {
-          const ptsObj = ptsSnap.val();
-          if (!ptsObj) return;
+          const ptsObj = ptsSnap.val(); if (!ptsObj) return;
           const arr = Object.values(ptsObj).map(p => ({ u: p.u, v: p.v }));
-          // draw as series of small circles for visual consistency
-          for (let i = 0; i < arr.length; i++) {
-            paintCircleOnMesh(mesh, arr[i].u, arr[i].v, meta.color || '#ffffff', meta.width || 8);
-          }
+          for (let i = 0; i < arr.length; i++) paintCircleOnMesh(mesh, arr[i].u, arr[i].v, meta.color || '#ffffff', meta.width || 8);
         });
       });
     }
 
     onChildAdded(planesRef, (snap) => {
-      const id = snap.key;
-      const meta = snap.val();
-      if (!meta) return;
-      if (planeObjects.has(id)) return;
+      const id = snap.key, meta = snap.val(); if (!meta) return; if (planeObjects.has(id)) return;
       const mesh = createDrawingPlaneMesh(meta.widthMeters || 3, meta.heightMeters || 3);
       mesh.name = `plane-${id}`;
-      // place using pos if available (we store pos on create), otherwise place at reticle/fallback
-      if (meta.pos && typeof meta.pos.x === 'number') {
-        mesh.position.set(meta.pos.x, 0, meta.pos.z);
-      } else {
-        const rp = computeReticlePointOnFloor();
-        if (rp) mesh.position.set(rp.x, 0, rp.z); else mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
-      }
+      // place from stored pos or reticle/fallback
+      if (meta.pos && typeof meta.pos.x === 'number') mesh.position.set(meta.pos.x, 0, meta.pos.z);
+      else { const rp = computeReticlePointOnFloor(); if (rp) mesh.position.set(rp.x, 0, rp.z); else mesh.position.set(0, 0, -2 - planeObjects.size * 0.5); }
       scene.add(mesh);
-      // grid overlay for remote planes
-      const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-      grid.position.copy(mesh.position);
-      scene.add(grid);
+      const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4)); grid.position.copy(mesh.position); scene.add(grid);
       planeObjects.set(id, { mesh, meta, grid });
       listenStrokesForPlane(id, mesh);
     });
@@ -271,44 +241,35 @@ if (window.__surfaceless_main_loaded) {
       if (obj) { scene.remove(obj.mesh); if (obj.grid) scene.remove(obj.grid); planeObjects.delete(id); }
     });
 
-    /* ======= Create & push local plane (Place Canvas) ======= */
+    /* ===== Create local plane and push (Place Canvas) ===== */
     async function createLocalPlaneAndPush() {
       if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) return localPlacedPlaneId;
       const rp = computeReticlePointOnFloor();
       const mesh = createDrawingPlaneMesh(3, 3);
-      if (rp) mesh.position.set(rp.x, 0, rp.z);
-      else mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
-      scene.add(mesh);
-      localPlaneMesh = mesh;
-      // add grid overlay locally
-      localGrid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-      localGrid.position.copy(mesh.position);
-      scene.add(localGrid);
-
-      // push minimal meta (pos included)
+      if (rp) mesh.position.set(rp.x, 0, rp.z); else mesh.position.set(0, 0, -2 - planeObjects.size * 0.5);
+      scene.add(mesh); localPlaneMesh = mesh;
+      localGrid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4)); localGrid.position.copy(mesh.position); scene.add(localGrid);
+      // push minimal meta with pos for other clients
       const meta = { createdAt: Date.now(), widthMeters: mesh.userData.widthMeters, heightMeters: mesh.userData.heightMeters, pos: { x: mesh.position.x, z: mesh.position.z } };
-      const newRef = push(planesRef);
-      await set(newRef, meta);
-      localPlacedPlaneId = newRef.key;
-      planeObjects.set(localPlacedPlaneId, { mesh, meta, grid: localGrid });
+      const newRef = push(planesRef); await set(newRef, meta);
+      localPlacedPlaneId = newRef.key; planeObjects.set(localPlacedPlaneId, { mesh, meta, grid: localGrid });
       listenStrokesForPlane(localPlacedPlaneId, mesh);
-      console.log("Local plane created:", localPlacedPlaneId, meta);
+      console.log("Created local plane", localPlacedPlaneId, meta);
       return localPlacedPlaneId;
     }
 
-    /* ======= Drawing lifecycle: sampling & smoothing ======= */
+    /* ===== Sampling & painting loop ===== */
     function sampleAndPaint() {
       if (!localPlacedPlaneId) return;
-      const pt = computeReticlePointOnFloor();
-      if (!pt || !planeObjects.has(localPlacedPlaneId)) return;
-      const planeObj = planeObjects.get(localPlacedPlaneId);
+      const pt = computeReticlePointOnFloor(); if (!pt) return;
+      const planeObj = planeObjects.get(localPlacedPlaneId); if (!planeObj) return;
       const uv = worldToPlaneUV(planeObj.mesh, pt);
-      // brush size px: convert brushRange (meters->pixels). We'll keep it simple: use brushRange as px.
       const brushPx = parseInt(brushRange?.value || 12, 10) || 12;
       const color = (colorPicker?.value) ? colorPicker.value : "#00ffd0";
-      // smoothing: if lastSamplePoint exists, interpolate N steps
       if (lastSamplePoint) {
-        const steps = Math.max(1, Math.floor(THREE.MathUtils.euclideanDistance(lastSamplePoint.u, lastSamplePoint.v, uv.u, uv.v) * 60));
+        // interpolate
+        const dist = Math.hypot(lastSamplePoint.u - uv.u, lastSamplePoint.v - uv.v);
+        const steps = Math.max(1, Math.floor(dist * 200)); // tweak multiplier for smoothness
         for (let i = 0; i <= steps; i++) {
           const t = i / Math.max(1, steps);
           const iu = THREE.MathUtils.lerp(lastSamplePoint.u, uv.u, t);
@@ -321,8 +282,6 @@ if (window.__surfaceless_main_loaded) {
         strokeBuffer.push({ u: uv.u, v: uv.v });
       }
       lastSamplePoint = uv;
-
-      // flush in small batches
       if (strokeBuffer.length >= 8 && currentStrokeId) {
         const flush = strokeBuffer.splice(0, strokeBuffer.length);
         pushPointsForStroke(localPlacedPlaneId, currentStrokeId, flush).catch(e => console.warn(e));
@@ -331,45 +290,23 @@ if (window.__surfaceless_main_loaded) {
 
     async function startSpraying() {
       if (spraying) return;
-      // ensure plane exists (auto-place if not)
-      if (!localPlacedPlaneId) {
-        statusEl && (statusEl.textContent = "Placing canvas...");
-        await createLocalPlaneAndPush();
-        statusEl && (statusEl.textContent = "Canvas placed — hold to spray");
-      }
-      if (!localPlacedPlaneId) { statusEl && (statusEl.textContent = "No canvas"); return; }
-      spraying = true;
-      lastSamplePoint = null;
-      strokeBuffer = [];
-      // create stroke node in Firebase
-      const color = (colorPicker?.value) ? colorPicker.value : "#00ffd0";
-      const width = parseInt(brushRange?.value || 12, 10) || 12;
+      if (!localPlacedPlaneId) { statusEl && (statusEl.textContent = "Placing canvas..."); await createLocalPlaneAndPush(); statusEl && (statusEl.textContent = "Canvas placed — hold to spray"); }
+      spraying = true; lastSamplePoint = null; strokeBuffer = [];
+      const color = (colorPicker?.value) ? colorPicker.value : "#00ffd0"; const width = parseInt(brushRange?.value || 12, 10) || 12;
       currentStrokeId = await createStrokeForPlane(localPlacedPlaneId, color, width);
-      // sampling loop (aim-driven) every 60ms
       samplingTimer = setInterval(sampleAndPaint, 60);
       statusEl && (statusEl.textContent = "Spraying...");
     }
-
     async function stopSpraying() {
       if (!spraying) return;
-      spraying = false;
-      if (samplingTimer) { clearInterval(samplingTimer); samplingTimer = null; }
-      // flush remaining
-      if (strokeBuffer.length > 0 && currentStrokeId) {
-        const buf = strokeBuffer.splice(0, strokeBuffer.length);
-        await pushPointsForStroke(localPlacedPlaneId, currentStrokeId, buf).catch(e => console.warn(e));
-      }
-      currentStrokeId = null;
-      lastSamplePoint = null;
-      statusEl && (statusEl.textContent = "Stopped");
+      spraying = false; if (samplingTimer) { clearInterval(samplingTimer); samplingTimer = null; }
+      if (strokeBuffer.length > 0 && currentStrokeId) { const buf = strokeBuffer.splice(0, strokeBuffer.length); await pushPointsForStroke(localPlacedPlaneId, currentStrokeId, buf).catch(e => console.warn(e)); }
+      currentStrokeId = null; lastSamplePoint = null; statusEl && (statusEl.textContent = "Stopped");
     }
 
-    /* ======= Camera helpers ======= */
+    /* ===== Camera helpers ===== */
     async function getCameras() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        return devices.filter(d => d.kind === 'videoinput');
-      } catch (e) { return []; }
+      try { const devs = await navigator.mediaDevices.enumerateDevices(); return devs.filter(d => d.kind === 'videoinput'); } catch (e) { return []; }
     }
     async function startCamera(deviceId = null) {
       if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
@@ -393,49 +330,53 @@ if (window.__surfaceless_main_loaded) {
       statusEl && (statusEl.textContent = "Camera ready");
     }
 
-    // If enable camera button exists, wire it, else try implicit start
+    /* ===== Enable Cam button (requests device motion permission on iOS) ===== */
     if (enableCameraBtn) {
       enableCameraBtn.addEventListener("click", async () => {
         enableCameraBtn.disabled = true;
-        statusEl && (statusEl.textContent = "Requesting camera...");
+        statusEl && (statusEl.textContent = "Requesting camera & motion permissions...");
         try {
+          // Request deviceorientation permission on iOS (must be from user gesture)
+          if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+            try {
+              const p = await DeviceMotionEvent.requestPermission();
+              if (p === "granted") console.log("Device orientation permission granted");
+            } catch (e) { console.warn("Device orientation permission denied or failed", e); }
+          }
           await startCamera(null);
           const cams = await getCameras();
           if (cameraSelect && cams.length > 1) {
             cameraSelect.style.display = "";
             cameraSelect.innerHTML = "";
             cams.forEach((c, idx) => {
-              const opt = document.createElement('option'); opt.value = c.deviceId; opt.text = c.label || ("Camera " + (idx+1));
+              const opt = document.createElement("option"); opt.value = c.deviceId; opt.text = c.label || ("Camera " + (idx+1));
               cameraSelect.appendChild(opt);
             });
-            cameraSelect.addEventListener('change', async () => {
+            cameraSelect.addEventListener("change", async () => {
               chosenDeviceId = cameraSelect.value;
               try { await startCamera(chosenDeviceId); statusEl && (statusEl.textContent = "Camera switched"); } catch (e) { console.warn(e); }
             });
           }
           startOrientationWatcher();
-          startHeadingWatcher && startHeadingWatcher();
-          statusEl && (statusEl.textContent = "Camera ready — Place canvas or hold to spray");
-        } catch (e) {
-          console.error("camera error", e);
+          statusEl && (statusEl.textContent = "Camera & motion ready — place canvas or hold to spray");
+        } catch (err) {
+          console.error("Camera/motion fail", err);
           enableCameraBtn.disabled = false;
           statusEl && (statusEl.textContent = "Camera permission required");
         }
       });
     } else {
-      (async () => {
-        try { await startCamera(null); startOrientationWatcher(); statusEl && (statusEl.textContent = "Camera ready"); } catch (e) { console.warn("implicit camera start failed", e); statusEl && (statusEl.textContent = "Tap Enable Cam"); }
-      })();
+      // If no enable button present (shouldn't happen in this HTML) attempt implicit start
+      (async () => { try { await startCamera(null); startOrientationWatcher(); statusEl && (statusEl.textContent = "Camera ready"); } catch (e) { console.warn("implicit camera start failed", e); statusEl && (statusEl.textContent = "Tap Enable Cam"); } })();
     }
 
-    /* ======= UI wiring: Place, Clear ======= */
+    /* ===== Place Canvas button wiring (samples GPS average then pushes meta) ===== */
     if (placeCanvasBtn) {
       placeCanvasBtn.addEventListener("click", async () => {
         placeCanvasBtn.disabled = true;
         statusEl && (statusEl.textContent = "Sampling GPS — hold still...");
-        // sample averaged GPS (best-effort) and push meta (lat/lon) — but plane pos still set to reticle
         try {
-          // small inline sample routine
+          // sample averaged GPS
           async function sampleAndAverageGPS(n = 5, delayMs = 300) {
             const samples = [];
             function getCurrentPositionPromise() {
@@ -445,40 +386,34 @@ if (window.__surfaceless_main_loaded) {
               });
             }
             for (let i = 0; i < n; i++) {
-              try { const p = await getCurrentPositionPromise(); samples.push(p.coords); } catch (e) {}
+              try { const p = await getCurrentPositionPromise(); samples.push(p.coords); } catch (e) { /* ignore */ }
               await new Promise(r => setTimeout(r, delayMs));
             }
             if (!samples.length) throw new Error("No GPS samples");
             const avg = samples.reduce((acc, s) => { acc.lat += s.latitude; acc.lon += s.longitude; acc.alt += (s.altitude || 0); return acc; }, { lat: 0, lon: 0, alt: 0 });
-            avg.lat /= samples.length; avg.lon /= samples.length; avg.alt /= samples.length;
-            return avg;
+            avg.lat /= samples.length; avg.lon /= samples.length; avg.alt /= samples.length; return avg;
           }
 
           const avg = await sampleAndAverageGPS(5, 300);
-          // create plane at reticle
+          // place plane at reticle (visual anchor) and push meta with gps
           const rp = computeReticlePointOnFloor();
           await createLocalPlaneAndPush();
-          // store geo info for future alignment if desired
-          const meta = { createdAt: Date.now(), lat: avg.lat, lon: avg.lon, alt: avg.alt, widthMeters: 3.0, heightMeters: 3.0, heading: 0 };
-          const newRef = push(planesRef);
-          await set(newRef, meta);
-          // localPlacedPlaneId set by createLocalPlaneAndPush; if you want the GPS-backed plane to be the new ID replace logic accordingly
+          const meta = { createdAt: Date.now(), lat: avg.lat, lon: avg.lon, alt: avg.alt, widthMeters: 3.0, heightMeters: 3.0 };
+          const newRef = push(planesRef); await set(newRef, meta);
           statusEl && (statusEl.textContent = "Canvas placed (geo saved). Hold to spray");
         } catch (e) {
           console.warn("GPS failed", e);
-          statusEl && (statusEl.textContent = "GPS failed — canvas placed without geo");
+          statusEl && (statusEl.textContent = "GPS failed — placed without geo. Hold to spray");
           await createLocalPlaneAndPush();
-        } finally {
-          placeCanvasBtn.disabled = false;
-        }
+        } finally { placeCanvasBtn.disabled = false; }
       });
     }
 
+    /* ===== Clear button ===== */
     if (clearBtn) {
       clearBtn.addEventListener("click", async () => {
         try {
           await set(ref(db, "planes"), null);
-          // remove local meshes
           planeObjects.forEach(p => { scene.remove(p.mesh); if (p.grid) scene.remove(p.grid); });
           planeObjects.clear();
           if (localPlaneMesh) { scene.remove(localPlaneMesh); localPlaneMesh = null; }
@@ -489,37 +424,28 @@ if (window.__surfaceless_main_loaded) {
       });
     }
 
-    /* ======= Input: press-and-hold for spray (pointer, touch, keyboard & volume fallback) ======= */
-    // Pointer/touch handlers on the canvas
-    function onPointerDown(e) {
-      e.preventDefault();
-      startSpraying().catch(err => console.warn(err));
-    }
-    function onPointerUp(e) {
-      e.preventDefault();
-      stopSpraying().catch(err => console.warn(err));
-    }
+    /* ===== Input: press-and-hold (pointer & keyboard & volume fallback) ===== */
+    function onPointerDown(e) { e.preventDefault(); startSpraying().catch(err => console.warn(err)); }
+    function onPointerUp(e) { e.preventDefault(); stopSpraying().catch(err => console.warn(err)); }
 
-    // Attach to canvas and video container so whole area can be used
     canvasEl.addEventListener("pointerdown", onPointerDown);
     canvasEl.addEventListener("pointerup", onPointerUp);
     canvasEl.addEventListener("pointercancel", onPointerUp);
     canvasEl.addEventListener("pointerleave", onPointerUp);
 
-    // keyboard fallback: Space or ArrowUp to spray (useful for debugging)
+    // keyboard fallback
     window.addEventListener("keydown", (ev) => {
-      // volume keys rarely map in browsers; use ArrowUp/ArrowDown/Space as practical fallback
       if (ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") {
-        if (!spraying) { ev.preventDefault(); startSpraying().catch(() => {}); }
+        if (!spraying) { ev.preventDefault(); startSpraying().catch(()=>{}); }
       }
     });
     window.addEventListener("keyup", (ev) => {
       if (ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") {
-        if (spraying) { ev.preventDefault(); stopSpraying().catch(() => {}); }
+        if (spraying) { ev.preventDefault(); stopSpraying().catch(()=>{}); }
       }
     });
 
-    // Attempt to capture physical volume buttons on mobile: some browsers expose them as key events
+    // volume key attempts (some browsers expose)
     window.addEventListener("keydown", (ev) => {
       if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") {
         if (!spraying) startSpraying().catch(()=>{});
@@ -531,41 +457,31 @@ if (window.__surfaceless_main_loaded) {
       }
     });
 
-    /* ======= Render loop & UI reticle updates ======= */
+    /* ===== Render loop: reticle updates & render ===== */
     function renderLoop() {
       requestAnimationFrame(renderLoop);
-      // update reticle/crosshair position from aim ray
       const aim = computeReticlePointOnFloor();
       if (aim) {
-        reticle.visible = true;
-        reticle.position.copy(aim);
-        crosshair.visible = true;
-        crosshair.position.copy(aim);
+        reticle.visible = true; reticle.position.copy(aim);
+        crosshair.visible = true; crosshair.position.copy(aim);
       } else {
         reticle.visible = false;
         if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) {
           const obj = planeObjects.get(localPlacedPlaneId);
-          crosshair.visible = true;
-          crosshair.position.copy(obj.mesh.position);
-        } else {
-          crosshair.visible = false;
-        }
+          crosshair.visible = true; crosshair.position.copy(obj.mesh.position);
+        } else crosshair.visible = false;
       }
-
       renderer.render(scene, camera);
     }
     renderLoop();
 
-    /* ======= Resize handling ======= */
+    /* ===== Window resize ===== */
     window.addEventListener("resize", () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
     });
 
-    // initial message
-    statusEl && (statusEl.textContent = "Ready — Enable Cam, Place Canvas, then hold screen to spray");
-
-    // End of DOMContentLoaded
-  }); // end DOMContentLoaded
-} // end double-run guard
+    // Final ready state
+    statusEl && (statusEl.textContent = "Ready — Enable Cam, Place Canvas, then hold to spray");
+    console.log("Main module loaded successfully");
+  }); // DOMContentLoaded
+} // double-run guard
