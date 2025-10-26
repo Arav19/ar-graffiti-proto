@@ -1,7 +1,9 @@
 // public/main.js
-// Full app: Floor-locked 2D canvas drawing anchored by GPS + realtime Firebase sync
-// Uses Three.js (module) + Firebase Realtime DB (v11 modular).
-// Replaces older main.js — single-file, defensive, DOMContentLoaded wrapper.
+// Merged final: AR graffiti with pinned 2D canvases + realtime Firebase sync.
+// - Uses WebXR hit-test when available, fallback camera otherwise.
+// - Stores arPose + geo in Firebase so other users can reconstruct canvases.
+// - True 2D HTML canvas textures (UV mapping) and smooth strokes.
+// - Press-and-hold to spray, DeviceOrientation heading capture for stable orientation.
 
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
@@ -17,7 +19,7 @@ import {
   onValue
 } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
 
-/* ===== FIREBASE CONFIG (your project) ===== */
+/* ===== FIREBASE CONFIG (use your config provided) ===== */
 const firebaseConfig = {
   apiKey: "AIzaSyBCzRpUX5mexhGj5FzqEWKoFAdljNJdbHE",
   authDomain: "surfaceless-firebase.firebaseapp.com",
@@ -31,100 +33,108 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const planesRef = ref(db, "planes");
 
-/* ===== Prevent duplicate execution (extensions / HMR) ===== */
+/* ===== Prevent double execution (hot reload / extensions) ===== */
 if (window.__surfaceless_main_loaded) {
-  console.warn("main.js already executed — skipping");
+  console.warn("main.js already loaded - skipping second run");
 } else {
   window.__surfaceless_main_loaded = true;
 
   window.addEventListener("DOMContentLoaded", () => {
-    console.log("Starting AR Graffiti app (fixed anchor + yaw + 2D paint)");
+    console.log("DOM loaded — starting AR Graffiti app");
 
-    /* ===== DOM elements ===== */
-    const enableCameraBtn = document.getElementById("enableCameraBtn");
-    const cameraSelect = document.getElementById("cameraSelect");
-    const placeCanvasBtn = document.getElementById("placeCanvasBtn");
+    /* ===== DOM ===== */
+    const enterArBtn = document.getElementById("enterArBtn");
+    const placePlaneBtn = document.getElementById("placePlaneBtn");
     const clearBtn = document.getElementById("clearBtn");
     const undoBtn = document.getElementById("undoBtn");
-    const colorPicker = document.getElementById("colorPicker");
-    const brushRange = document.getElementById("brushRange");
     const statusEl = document.getElementById("status");
     const networkStatusEl = document.getElementById("networkStatus");
-    const videoEl = document.getElementById("camera-feed");
+    const colorPicker = document.getElementById("colorPicker");
+    const brushRange = document.getElementById("brushRange");
     const canvasEl = document.getElementById("three-canvas");
+    const fallbackVideoEl = document.getElementById("camera-feed");
 
-    if (!canvasEl) {
-      console.error("Missing #three-canvas in DOM. Aborting.");
-      if (statusEl) statusEl.textContent = "Missing canvas element";
-      return;
-    }
+    function setStatus(s) { if (statusEl) statusEl.textContent = s; }
 
-    function updateStatus(text) { if (statusEl) statusEl.textContent = text; }
+    /* ===== State & helpers ===== */
+    let xrSession = null;
+    let xrRefSpace = null;
+    let viewerSpace = null;
+    let hitTestSource = null;
+    let renderer, scene, camera;
+    let reticle = null;
+    let rendererStarted = false;
 
-    /* ===== small helpers ===== */
-    function getUniqueUserId() {
-      let uid = localStorage.getItem("surfaceless_uid");
-      if (!uid) {
-        uid = "user_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
-        localStorage.setItem("surfaceless_uid", uid);
+    const planeObjects = new Map(); // planeId -> { mesh, meta, grid, renderedStrokes:Set }
+    let localPlaneId = null; // id of plane created by this client (if any)
+    let lastStrokeId = null;
+
+    // drawing state
+    let drawing = false;
+    let currentStroke = null;
+    let currentStrokeTmp = []; // points buffered before push
+    let samplingTimer = null;
+    let sprayIntervalMs = 50;
+    let lastSampleUV = null;
+    let currentStrokeRef = null;
+
+    // heading (alpha) used for geo reprojection / orientation stabilization
+    let lastHeading = 0;
+    function startHeadingWatcher() {
+      const handler = (ev) => {
+        if (ev && ev.alpha != null) lastHeading = ev.alpha;
+      };
+      if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+        // try to request on iOS when user interacts
+        DeviceOrientationEvent.requestPermission?.().then(p => {
+          if (p === "granted") window.addEventListener("deviceorientation", handler, true);
+        }).catch(()=>{});
+      } else {
+        window.addEventListener("deviceorientation", handler, true);
       }
-      return uid;
     }
 
-    /* ===== Camera state ===== */
-    let camVideo = videoEl || null;
-    let camStream = null;
-    let cameraEnabled = false;
+    /* ===== THREE setup ===== */
+    function initThree() {
+      renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.xr.enabled = false; // becomes true when AR session starts
 
-    /* ===== Three.js setup ===== */
-    const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x000000, 0);
-    renderer.outputEncoding = THREE.sRGBEncoding;
+      scene = new THREE.Scene();
+      scene.background = null;
 
-    const scene = new THREE.Scene();
-    scene.background = null;
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
+      camera.position.set(0, 1.6, 0);
 
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
-    camera.position.set(0, 1.6, 0);
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+      scene.add(hemi);
+    }
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
-    scene.add(hemi);
+    initThree();
 
-    /* ===== Reticle + crosshair + grid helpers ===== */
-    function makeReticle(radius = 0.12) {
-      const geo = new THREE.RingGeometry(radius * 0.85, radius, 32);
-      geo.rotateX(-Math.PI / 2);
+    /* ===== Reticle + grid + helper functions ===== */
+    function makeReticle() {
+      const geo = new THREE.RingGeometry(0.12 * 0.85, 0.12, 32).rotateX(-Math.PI/2);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.95, side: THREE.DoubleSide });
-      const m = new THREE.Mesh(geo, mat);
-      m.visible = false;
-      scene.add(m);
-      return m;
+      const ring = new THREE.Mesh(geo, mat);
+      ring.matrixAutoUpdate = false;
+      ring.visible = false;
+      scene.add(ring);
+      return ring;
     }
-    function makeCross(radius = 0.06) {
-      const geo = new THREE.CircleGeometry(radius, 24);
-      geo.rotateX(-Math.PI / 2);
-      const mat = new THREE.MeshBasicMaterial({ color: 0x00ffd0, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
-      const m = new THREE.Mesh(geo, mat);
-      m.visible = false;
-      scene.add(m);
-      return m;
-    }
-    function makeGridMesh(size = 5, divisions = 10) {
-      const g = new THREE.GridHelper(size, divisions, 0x00ffff, 0x004444);
-      g.material.opacity = 0.25;
-      g.material.transparent = true;
-      g.rotation.x = -Math.PI / 2;
-      g.position.y = 0.001;
-      return g;
+    function makeGridMesh(size = 2, divisions = 8) {
+      const grid = new THREE.GridHelper(size, divisions, 0x00ffff, 0x004444);
+      grid.material.opacity = 0.25;
+      grid.material.transparent = true;
+      grid.visible = true;
+      grid.position.y = 0;
+      return grid;
     }
 
-    const reticle = makeReticle(0.12);
-    const crosshair = makeCross(0.06);
-
-    /* ===== Drawing plane (canvas texture) ===== */
-    function createDrawingPlaneMesh(widthMeters = 5, heightMeters = 5, texSize = 2048) {
+    // create a drawing plane (HTML canvas -> texture)
+    function createDrawingPlaneMesh(widthMeters = 2, heightMeters = 2, texSize = 2048) {
       const c = document.createElement("canvas");
       c.width = texSize; c.height = texSize;
       const ctx = c.getContext("2d");
@@ -136,594 +146,519 @@ if (window.__surfaceless_main_loaded) {
 
       const geom = new THREE.PlaneGeometry(widthMeters, heightMeters);
       const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+
       const mesh = new THREE.Mesh(geom, mat);
-
-      // Force it flat on the ground and do NOT parent to camera
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.y = 0.001; // slightly above floor to avoid z-fighting
-
-      mesh.userData = {
-        canvas: c,
-        ctx,
-        tex,
-        w: texSize,
-        h: texSize,
-        widthMeters,
-        heightMeters,
-        renderedStrokes: new Set()
-      };
-
+      mesh.rotation.x = -Math.PI/2; // flat on floor
+      mesh.position.y = 0.001; // tiny lift to avoid z-fighting
+      mesh.userData = { canvas: c, ctx, tex, w: texSize, h: texSize, widthMeters, heightMeters, renderedStrokes: new Set() };
       return mesh;
     }
 
-    /* ===== State ===== */
-    const planeObjects = new Map(); // id -> {mesh,meta,grid}
-    let localPlacedPlaneId = null;
-    let localPlaneMesh = null;
-    let localGrid = null;
-
-    let spraying = false;
-    let samplingTimer = null;
-    let strokeBuffer = [];
-    let currentStrokeId = null;
-    let lastSamplePoint = null;
-    let lastStrokeId = null;
-    let flushTimeout = null;
-
-    /* ===== Device orientation (for camera aiming) ===== */
-    const zee = new THREE.Vector3(0, 0, 1);
-    const euler = new THREE.Euler();
-    const q0 = new THREE.Quaternion();
-    const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-    function setObjectQuaternion(quaternion, alpha, beta, gamma, orient) {
-      const degToRad = Math.PI / 180;
-      const _x = beta ? beta * degToRad : 0;
-      const _y = alpha ? alpha * degToRad : 0;
-      const _z = gamma ? gamma * degToRad : 0;
-      euler.set(_x, _y, _z, 'ZXY');
-      quaternion.setFromEuler(euler);
-      quaternion.multiply(q1);
-      quaternion.multiply(q0.setFromAxisAngle(zee, -orient));
-    }
-    let screenOrientation = window.orientation || 0;
-    window.addEventListener('orientationchange', () => screenOrientation = window.orientation || 0);
-
-    let lastHeading = 0;
-    function startHeadingWatcher() {
-      function handler(e) { if (e.alpha != null) lastHeading = e.alpha; }
-      if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-        // requestPermission must be called from user gesture; we call it when enabling camera
-        window.addEventListener("deviceorientation", handler, true);
-      } else {
-        window.addEventListener("deviceorientation", handler, true);
-      }
-    }
-    function handleDeviceOrientationEvent(ev) {
-      if (!ev) return;
-      setObjectQuaternion(camera.quaternion, ev.alpha, ev.beta, ev.gamma, screenOrientation || 0);
-    }
-    function startOrientationWatcher() {
-      if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-        // requestPermission previously attempted on enableCam click (user gesture)
-        window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
-      } else {
-        window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
-      }
-    }
-
-    /* ===== Raycast from camera center to floor y=0 ===== */
-    function computeReticlePointOnFloor() {
-      const origin = new THREE.Vector3();
-      camera.getWorldPosition(origin);
-      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-
-      // require some downward component (user must tilt a bit)
-      if (Math.abs(dir.y) < 0.01) return null;
-
-      const t = -origin.y / dir.y; // origin.y + t*dir.y = 0 => t = -origin.y/dir.y
-      if (t <= 0) return null;
-      return origin.clone().add(dir.multiplyScalar(t));
-    }
-
-    /* ===== World <-> Plane UV mapping (single definition) ===== */
-    function worldToPlaneUV(mesh, worldPos) {
-      const local = worldPos.clone();
-      mesh.worldToLocal(local); // transform into mesh local space
-      const halfW = mesh.userData.widthMeters / 2;
-      const halfH = mesh.userData.heightMeters / 2;
-      const u = (local.x + halfW) / mesh.userData.widthMeters;
-      const v = (local.z + halfH) / mesh.userData.heightMeters;
-      // v flip so canvas top maps consistently (we use stored coords as-is in push)
-      return { u: THREE.MathUtils.clamp(u, 0, 1), v: THREE.MathUtils.clamp(1 - v, 0, 1) };
-    }
-
-    /* ===== Paint on plane canvas texture (small circle stamping) ===== */
-    function paintCircleOnMesh(mesh, u, v, color, radiusPx) {
-      if (!mesh || !mesh.userData || !mesh.userData.ctx) return;
-      const ctx = mesh.userData.ctx;
-      const x = Math.round(u * mesh.userData.w);
-      const y = Math.round((1 - v) * mesh.userData.h); // flip back for canvas coordinates
-      ctx.beginPath();
-      ctx.fillStyle = color;
-      ctx.arc(x, y, radiusPx, 0, Math.PI * 2);
-      ctx.fill();
-      mesh.userData.tex.needsUpdate = true;
-    }
-
-    /* ====== GPS helpers ====== */
-    function getCurrentPositionPromise() {
-      return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) return reject(new Error("No geolocation"));
-        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
-      });
-    }
-    async function sampleAndAverageGPS(n = 6, delayMs = 300) {
-      const samples = [];
-      for (let i = 0; i < n; i++) {
-        try { const p = await getCurrentPositionPromise(); samples.push(p.coords); } catch (e) { /* ignore single failures */ }
-        await new Promise(r => setTimeout(r, delayMs));
-      }
-      if (!samples.length) throw new Error("No GPS samples");
-      const avg = samples.reduce((acc, s) => { acc.lat += s.latitude; acc.lon += s.longitude; acc.alt += (s.altitude || 0); return acc; }, { lat: 0, lon: 0, alt: 0 });
-      avg.lat /= samples.length; avg.lon /= samples.length; avg.alt /= samples.length;
-      return avg;
-    }
-
-    // Convert lat/lon deltas to metres (east/north)
+    /* ===== Geo helpers (meters <-> latlon) ===== */
     function latLonToMetersDelta(lat0, lon0, lat1, lon1) {
       const R = 6378137;
-      const dLat = (lat1 - lat0) * Math.PI / 180;
-      const dLon = (lon1 - lon0) * Math.PI / 180;
-      const meanLat = (lat0 + lat1) / 2 * Math.PI / 180;
+      const dLat = (lat1 - lat0) * Math.PI/180;
+      const dLon = (lon1 - lon0) * Math.PI/180;
+      const meanLat = (lat0 + lat1) / 2 * Math.PI/180;
       const north = dLat * R;
       const east = dLon * R * Math.cos(meanLat);
       return { east, north };
     }
-
-    // Map east/north meters into local XZ using device heading (viewer)
     function metersToLocalXZ(east, north, headingDeg) {
-      const theta = -headingDeg * Math.PI / 180; // rotate by negative heading so that device forward aligns
+      const theta = -headingDeg * Math.PI/180;
       const x = east * Math.cos(theta) - north * Math.sin(theta);
       const z = east * Math.sin(theta) + north * Math.cos(theta);
       return { x, z: -z };
     }
 
-    /* ===== Firebase stroke helpers ===== */
-    async function createStrokeForPlane(planeId, color, width) {
-      const strokesRef = ref(db, `planes/${planeId}/strokes`);
-      const strokeRef = push(strokesRef);
-      await set(strokeRef, { color, width, ownerId: getUniqueUserId(), createdAt: Date.now() });
-      lastStrokeId = strokeRef.key;
-      return strokeRef.key;
-    }
-
-    async function pushPointsForStroke(planeId, strokeId, points) {
-      if (!points || points.length === 0) return;
-      const pointsRef = ref(db, `planes/${planeId}/strokes/${strokeId}/points`);
-      const updates = {};
-      for (const p of points) {
-        const key = push(pointsRef).key;
-        updates[key] = { u: p.u, v: p.v, t: Date.now() };
-      }
-      await update(ref(db, `planes/${planeId}/strokes/${strokeId}/points`), updates);
-    }
-
-    /* ===== Listen for strokes for a plane and render incremental points ===== */
-    function listenStrokesForPlane(planeId, mesh) {
-      const strokesRef = ref(db, `planes/${planeId}/strokes`);
-      onChildAdded(strokesRef, (sSnap) => {
-        const strokeId = sSnap.key;
-        const meta = sSnap.val();
-        // avoid re-rendering strokes twice
-        if (mesh.userData.renderedStrokes.has(strokeId)) return;
-        mesh.userData.renderedStrokes.add(strokeId);
-
-        const ptsRef = ref(db, `planes/${planeId}/strokes/${strokeId}/points`);
-        onChildAdded(ptsRef, (ptSnap) => {
-          const pt = ptSnap.val();
-          if (!pt) return;
-          paintCircleOnMesh(mesh, pt.u, pt.v, meta.color || '#ffffff', meta.width || 8);
-        });
+    function getCurrentPositionPromise() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("No geolocation"));
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
       });
     }
 
-    /* ===== Listen for planes in DB and add to scene ===== */
+    /* ===== Firebase: remote plane creation listener ===== */
     onChildAdded(planesRef, (snap) => {
       const id = snap.key;
       const meta = snap.val();
       if (!meta) return;
       if (planeObjects.has(id)) return;
-
-      const mesh = createDrawingPlaneMesh(meta.widthMeters || 5, meta.heightMeters || 5);
-      mesh.name = `plane-${id}`;
-
-      // Place using saved lat/lon if available (reproject to local XZ)
-      if (meta.lat != null && meta.lon != null) {
-        getCurrentPositionPromise().then(pos => {
-          try {
-            const myLat = pos.coords.latitude, myLon = pos.coords.longitude;
-            // east/north from viewer -> plane
-            const { east, north } = latLonToMetersDelta(myLat, myLon, meta.lat, meta.lon);
-            // convert to local x,z using viewer heading
-            const { x, z } = metersToLocalXZ(east, north, lastHeading || 0);
-            mesh.position.set(x, 0.001, z);
-          } catch (e) {
-            console.warn("Failed geo reprojection:", e);
-            mesh.position.set(0, 0.001, -2 - planeObjects.size * 0.5);
-          }
-          scene.add(mesh);
-          const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-          grid.position.set(mesh.position.x, 0.001, mesh.position.z);
-          scene.add(grid);
-          planeObjects.set(id, { mesh, meta, grid });
-          listenStrokesForPlane(id, mesh);
-        }).catch(() => {
-          mesh.position.set(0, 0.001, -2 - planeObjects.size * 0.5);
-          scene.add(mesh);
-          const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-          grid.position.set(mesh.position.x, 0.001, mesh.position.z);
-          scene.add(grid);
-          planeObjects.set(id, { mesh, meta, grid });
-          listenStrokesForPlane(id, mesh);
-        });
-      } else if (meta.pos && typeof meta.pos.x === 'number') {
-        mesh.position.set(meta.pos.x, 0.001, meta.pos.z);
-        scene.add(mesh);
-        const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-        grid.position.set(mesh.position.x, 0.001, mesh.position.z);
-        scene.add(grid);
-        planeObjects.set(id, { mesh, meta, grid });
-        listenStrokesForPlane(id, mesh);
-      } else {
-        mesh.position.set(0, 0.001, -2 - planeObjects.size * 0.5);
-        scene.add(mesh);
-        const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-        grid.position.set(mesh.position.x, 0.001, mesh.position.z);
-        scene.add(grid);
-        planeObjects.set(id, { mesh, meta, grid });
-        listenStrokesForPlane(id, mesh);
-      }
+      createRemotePlane(id, meta);
     });
-
     onChildRemoved(planesRef, (snap) => {
       const id = snap.key;
       const obj = planeObjects.get(id);
       if (!obj) return;
-      if (obj.mesh) {
-        obj.mesh.geometry.dispose();
-        if (obj.mesh.material.map) obj.mesh.material.map.dispose();
-        obj.mesh.material.dispose();
-        scene.remove(obj.mesh);
-      }
-      if (obj.grid) {
-        obj.grid.geometry.dispose();
-        obj.grid.material.dispose();
-        scene.remove(obj.grid);
-      }
+      // cleanup
+      try { obj.mesh.geometry.dispose(); } catch(e){}
+      try { obj.mesh.material.map?.dispose(); obj.mesh.material.dispose(); } catch(e){}
+      scene.remove(obj.mesh);
+      if (obj.grid) { scene.remove(obj.grid); }
       planeObjects.delete(id);
-      if (id === localPlacedPlaneId) {
-        localPlacedPlaneId = null;
-        localPlaneMesh = null;
+    });
+
+    /* ===== Create remote plane (from DB meta) ===== */
+    async function createRemotePlane(planeId, meta) {
+      const width = meta.widthMeters || 2;
+      const height = meta.heightMeters || 2;
+      const mesh = createDrawingPlaneMesh(width, height);
+      mesh.name = `plane-${planeId}`;
+
+      // if AR session active AND meta.arPose available, place via arPose (best effort)
+      if (meta.arPose && renderer && renderer.xr && renderer.xr.isPresenting) {
+        try {
+          mesh.position.set(meta.arPose.x, meta.arPose.y, meta.arPose.z);
+          mesh.quaternion.set(meta.arPose.qx, meta.arPose.qy, meta.arPose.qz, meta.arPose.qw);
+          scene.add(mesh);
+        } catch (e) {
+          mesh.position.set(0, 0.001, -2 - planeObjects.size*0.5);
+          scene.add(mesh);
+        }
+      } else if (meta.lat != null && meta.lon != null) {
+        // reproject using current GPS to approximate local XZ
+        try {
+          const pos = await getCurrentPositionPromise();
+          const myLat = pos.coords.latitude, myLon = pos.coords.longitude;
+          const { east, north } = latLonToMetersDelta(myLat, myLon, meta.lat, meta.lon);
+          const { x, z } = metersToLocalXZ(east, north, meta.headingAtPlace || 0);
+          mesh.position.set(x, 0.001, z);
+          scene.add(mesh);
+        } catch (e) {
+          mesh.position.set(0, 0.001, -2 - planeObjects.size*0.5);
+          scene.add(mesh);
+        }
+      } else {
+        mesh.position.set(0, 0.001, -2 - planeObjects.size*0.5);
+        scene.add(mesh);
       }
-    });
 
-    /* ===== Network status indicator (connected) ===== */
-    const connectedRef = ref(db, '.info/connected');
-    onValue(connectedRef, (snap) => {
-      const connected = snap.val();
-      if (networkStatusEl) networkStatusEl.className = connected ? 'connected' : 'offline';
-    });
+      // optional grid for visibility
+      const grid = makeGridMesh(Math.max(width, height), Math.round(Math.max(width, height)*4));
+      grid.position.set(mesh.position.x, 0, mesh.position.z);
+      scene.add(grid);
 
-    /* ===== Create local plane (push metadata including GPS + heading) ===== */
-    async function createLocalPlaneAndPush() {
-      if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) return localPlacedPlaneId;
-      const rp = computeReticlePointOnFloor();
-      const pos = rp ? { x: rp.x, z: rp.z } : { x: 0, z: -2 };
-      const gpsMeta = {};
-      try {
-        const avg = await sampleAndAverageGPS(5, 250);
-        gpsMeta.lat = avg.lat; gpsMeta.lon = avg.lon; gpsMeta.alt = avg.alt;
-      } catch (e) { /* ignore GPS failure */ }
+      planeObjects.set(planeId, { mesh, meta, grid });
 
+      // listen strokes for this plane
+      const strokesRef = ref(db, `planes/${planeId}/strokes`);
+      onChildAdded(strokesRef, (sSnap) => {
+        const stroke = sSnap.val();
+        if (!stroke) return;
+        // avoid re-rendering stroke twice if already rendered
+        if (mesh.userData.renderedStrokes.has(sSnap.key)) return;
+        mesh.userData.renderedStrokes.add(sSnap.key);
+        drawStrokeOnPlane(planeId, stroke, false);
+      });
+    }
+
+    /* ===== Draw stroke on plane's canvas texture ===== */
+    function drawStrokeOnPlane(planeId, stroke, local = false) {
+      const p = planeObjects.get(planeId);
+      if (!p) return;
+      const mesh = p.mesh;
+      const ctx = mesh.userData.ctx;
+      const w = mesh.userData.w;
+      const h = mesh.userData.h;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.strokeStyle = stroke.color || "#ffffff";
+      ctx.lineWidth = stroke.width || 8;
+
+      const pts = stroke.points || [];
+      if (pts.length === 0) return;
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const x = Math.round(pts[i].u * w);
+        const y = Math.round((1 - pts[i].v) * h);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      mesh.userData.tex.needsUpdate = true;
+    }
+
+    /* ===== world -> plane UV helper (correct handling of rotated plane) ===== */
+    function worldToPlaneUV(mesh, worldPos) {
+      const local = worldPos.clone();
+      mesh.worldToLocal(local);
+      const halfW = mesh.userData.widthMeters / 2;
+      const halfH = mesh.userData.heightMeters / 2;
+      // local.x -> left/right maps to U
+      // local.z -> forward/back maps to V (since plane rotated -90 around X)
+      const u = (local.x + halfW) / mesh.userData.widthMeters;
+      const v = (local.z + halfH) / mesh.userData.heightMeters;
+      return { u: THREE.MathUtils.clamp(u, 0, 1), v: THREE.MathUtils.clamp(v, 0, 1) };
+    }
+
+    /* ===== UV -> canvas XY (for pointer-based drawing) ===== */
+    function uvToCanvasXY(uv, mesh) {
+      const u = uv.x, v = uv.y;
+      const x = Math.round(u * mesh.userData.w);
+      const y = Math.round((1 - v) * mesh.userData.h);
+      return { x, y };
+    }
+
+    /* ===== Place a plane: push meta to Firebase (arPose + geo if available) ===== */
+    async function placeNewPlaneAtPose(pose, optionalGeo) {
       const meta = {
         createdAt: Date.now(),
-        ownerId: getUniqueUserId(),
-        widthMeters: 5,
-        heightMeters: 5,
-        pos,
-        ...gpsMeta,
-        headingAtPlace: lastHeading || 0
+        widthMeters: 2.5,
+        heightMeters: 2.5,
+        arPose: pose ? {
+          x: pose.position.x, y: pose.position.y, z: pose.position.z,
+          qx: pose.orientation.x, qy: pose.orientation.y, qz: pose.orientation.z, qw: pose.orientation.w
+        } : null,
+        lat: optionalGeo?.lat ?? null,
+        lon: optionalGeo?.lon ?? null,
+        alt: optionalGeo?.alt ?? null,
+        headingAtPlace: optionalGeo?.heading ?? null
       };
       const newRef = push(planesRef);
       await set(newRef, meta);
-      localPlacedPlaneId = newRef.key;
-
-      // instantiate local visuals
-      const mesh = createDrawingPlaneMesh(meta.widthMeters, meta.heightMeters);
-      mesh.position.set(pos.x, 0.001, pos.z);
-      scene.add(mesh);
-      localPlaneMesh = mesh;
-      const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-      grid.position.set(mesh.position.x, 0.001, mesh.position.z);
-      scene.add(grid);
-      localGrid = grid;
-      planeObjects.set(localPlacedPlaneId, { mesh, meta, grid });
-      listenStrokesForPlane(localPlacedPlaneId, mesh);
-      console.log("Created local plane", localPlacedPlaneId, meta);
-      return localPlacedPlaneId;
+      localPlaneId = newRef.key;
+      setStatus("Canvas placed — draw now (hold to spray)");
+      // create immediate local plane for responsiveness; DB listener will also create (duplicate guarded)
+      createRemotePlane(localPlaneId, meta);
+      return localPlaneId;
     }
 
-    /* ===== Sampling loop: sample reticle and paint while spraying ===== */
-    function sampleAndPaint() {
-      if (!localPlacedPlaneId) return;
-      const pt = computeReticlePointOnFloor();
-      if (!pt) return;
-      const planeObj = planeObjects.get(localPlacedPlaneId);
-      if (!planeObj) return;
-      const uv = worldToPlaneUV(planeObj.mesh, pt);
-      const brushPx = parseInt(brushRange?.value || 12, 10) || 12;
-      const color = colorPicker?.value || "#00ffd0";
+    /* ===== Try get geo helper ===== */
+    async function tryGetGeo() {
+      try {
+        const p = await getCurrentPositionPromise();
+        return { lat: p.coords.latitude, lon: p.coords.longitude, alt: p.coords.altitude || 0, heading: lastHeading || 0 };
+      } catch (e) {
+        return null;
+      }
+    }
 
-      if (lastSamplePoint) {
-        const dist = Math.hypot(lastSamplePoint.u - uv.u, lastSamplePoint.v - uv.v);
-        const steps = Math.max(1, Math.floor(dist * 400));
-        for (let i = 0; i <= steps; i++) {
-          const t = i / Math.max(1, steps);
-          const iu = THREE.MathUtils.lerp(lastSamplePoint.u, uv.u, t);
-          const iv = THREE.MathUtils.lerp(lastSamplePoint.v, uv.v, t);
-          paintCircleOnMesh(planeObj.mesh, iu, iv, color, brushPx);
-          strokeBuffer.push({ u: iu, v: iv });
-        }
-      } else {
-        paintCircleOnMesh(planeObj.mesh, uv.u, uv.v, color, brushPx);
-        strokeBuffer.push({ u: uv.u, v: uv.v });
+    /* ======= AR session support & hit-test ======= */
+    async function startARSession() {
+      if (!navigator.xr) {
+        setStatus("WebXR not available on this device — using fallback camera");
+        startFallbackMode();
+        return;
       }
 
-      lastSamplePoint = uv;
-
-      // Debounced flush of points (non-blocking)
-      clearTimeout(flushTimeout);
-      flushTimeout = setTimeout(() => {
-        if (strokeBuffer.length > 0 && currentStrokeId) {
-          const flush = strokeBuffer.splice(0, strokeBuffer.length);
-          pushPointsForStroke(localPlacedPlaneId, currentStrokeId, flush).catch(e => console.warn("pushPoints failed", e));
-        }
-      }, 120);
-    }
-
-    async function startSpraying() {
-      if (spraying) return;
-      if (!cameraEnabled) { updateStatus("Enable camera first"); return; }
-      if (!localPlacedPlaneId) {
-        updateStatus("Placing canvas...");
-        try {
-          await createLocalPlaneAndPush();
-          updateStatus("Canvas placed — hold to spray");
-        } catch (e) {
-          console.error("Failed to create plane:", e);
-          updateStatus("Failed to place canvas");
+      try {
+        const supported = await navigator.xr.isSessionSupported("immersive-ar");
+        if (!supported) {
+          setStatus("AR not supported — using fallback camera");
+          startFallbackMode();
           return;
         }
-      }
-      spraying = true;
-      lastSamplePoint = null;
-      strokeBuffer = [];
-      const color = colorPicker?.value || "#00ffd0";
-      const width = parseInt(brushRange?.value || 12, 10) || 12;
-      try {
-        currentStrokeId = await createStrokeForPlane(localPlacedPlaneId, color, width);
-        samplingTimer = setInterval(sampleAndPaint, 50);
-        updateStatus("Spraying...");
       } catch (e) {
-        console.error("start stroke failed:", e);
-        spraying = false;
-        updateStatus("Failed to start stroke");
+        console.warn("XR support check failed", e);
+        startFallbackMode();
+        return;
       }
-    }
 
-    async function stopSpraying() {
-      if (!spraying) return;
-      spraying = false;
-      if (samplingTimer) { clearInterval(samplingTimer); samplingTimer = null; }
-      clearTimeout(flushTimeout);
-      if (strokeBuffer.length > 0 && currentStrokeId) {
-        const buf = strokeBuffer.splice(0, strokeBuffer.length);
-        await pushPointsForStroke(localPlacedPlaneId, currentStrokeId, buf).catch(e => console.warn("final push failed", e));
-      }
-      currentStrokeId = null;
-      lastSamplePoint = null;
-      updateStatus("Ready to draw");
-    }
-
-    /* ===== Undo last stroke (local) ===== */
-    async function undoLastStroke() {
-      if (!lastStrokeId || !localPlacedPlaneId) { updateStatus("Nothing to undo"); return; }
       try {
-        await remove(ref(db, `planes/${localPlacedPlaneId}/strokes/${lastStrokeId}`));
-        // Clear local canvas and re-render strokes from DB (coarse approach)
-        const planeObj = planeObjects.get(localPlacedPlaneId);
-        if (planeObj && planeObj.mesh && planeObj.mesh.userData && planeObj.mesh.userData.ctx) {
-          const ctx = planeObj.mesh.userData.ctx;
-          ctx.clearRect(0, 0, planeObj.mesh.userData.w, planeObj.mesh.userData.h);
-          planeObj.mesh.userData.tex.needsUpdate = true;
-          planeObj.mesh.userData.renderedStrokes.clear();
-        }
-        lastStrokeId = null;
-        updateStatus("Undone");
-      } catch (e) {
-        console.warn("Undo failed", e);
-        updateStatus("Undo failed");
-      }
-    }
-
-    /* ===== Camera helpers (getUserMedia & iOS orientation permission) ===== */
-    async function getCameras() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        return devices.filter(d => d.kind === 'videoinput');
-      } catch (e) { console.warn("enumerateDevices failed", e); return []; }
-    }
-
-    async function startCamera(deviceId = null) {
-      try {
-        if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
-        const constraints = deviceId ? { video: { deviceId: { exact: deviceId }, facingMode: { ideal: "environment" } }, audio: false } : { video: { facingMode: { ideal: "environment" } }, audio: false };
-        camStream = await navigator.mediaDevices.getUserMedia(constraints);
-        if (!camVideo) {
-          camVideo = document.getElementById("camera-feed") || null;
-        }
-        camVideo = document.getElementById("camera-feed");
-        camVideo.srcObject = camStream;
-        try { await camVideo.play(); } catch (e) { console.warn("video play blocked", e); }
-        cameraEnabled = true;
-        updateStatus("Camera ready — Place Canvas");
+        xrSession = await navigator.xr.requestSession("immersive-ar", {
+          requiredFeatures: ["hit-test", "local-floor"],
+          optionalFeatures: ["dom-overlay", "bounded-floor"],
+          domOverlay: { root: document.body }
+        });
       } catch (err) {
-        console.error("Camera start failed:", err);
-        throw err;
+        console.error("XR request failed", err);
+        setStatus("AR start failed — using fallback");
+        startFallbackMode();
+        return;
+      }
+
+      renderer.xr.enabled = true;
+      await renderer.xr.setSession(xrSession);
+
+      // reticle
+      if (!reticle) reticle = makeReticle();
+
+      xrRefSpace = await xrSession.requestReferenceSpace("local-floor");
+      viewerSpace = await xrSession.requestReferenceSpace("viewer");
+
+      // hit test source
+      try {
+        const hitSource = await xrSession.requestHitTestSource({ space: viewerSpace });
+        hitTestSource = hitSource;
+      } catch (e) {
+        console.warn("hit-test source request failed", e);
+        hitTestSource = null;
+      }
+
+      xrSession.addEventListener("end", () => {
+        renderer.xr.enabled = false;
+        xrSession = null;
+        hitTestSource = null;
+        setStatus("AR ended");
+        placePlaneBtn.style.display = "none";
+        enterArBtn.style.display = "";
+      });
+
+      placePlaneBtn.style.display = "";
+
+      // start heading watcher
+      startHeadingWatcher();
+
+      // render loop with hit-test updates
+      renderer.setAnimationLoop((time, xrFrame) => {
+        if (xrFrame && hitTestSource && xrRefSpace) {
+          const hitResults = xrFrame.getHitTestResults(hitTestSource);
+          if (hitResults.length > 0) {
+            const hit = hitResults[0];
+            const pose = hit.getPose(xrRefSpace);
+            if (pose) {
+              reticle.visible = true;
+              const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
+              reticle.matrix.copy(m);
+            } else {
+              reticle.visible = false;
+            }
+          } else {
+            reticle.visible = false;
+          }
+        }
+        renderer.render(scene, camera);
+      });
+
+      setStatus("AR active — look around; tap 'Place Canvas' when reticle appears");
+      enterArBtn.style.display = "none";
+    }
+
+    /* ===== Fallback camera mode (non-XR) ===== */
+    async function startFallbackMode() {
+      // show place button
+      placePlaneBtn.style.display = "";
+      // request camera stream to video element
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+        fallbackVideoEl.srcObject = stream;
+        try { await fallbackVideoEl.play(); } catch (e) { console.warn("video.play blocked", e); }
+        setStatus("Camera active (fallback) — press Place Canvas");
+        startHeadingWatcher();
+      } catch (e) {
+        console.warn("fallback camera failed", e);
+        setStatus("Camera access required");
       }
     }
 
-    /* ===== Enable camera button behavior (user gesture required on iOS) ===== */
-    if (enableCameraBtn) {
-      enableCameraBtn.addEventListener("click", async () => {
-        enableCameraBtn.disabled = true;
-        updateStatus("Requesting camera & motion permission...");
+    /* ===== Place canvas button handler (AR or fallback) ===== */
+    placePlaneBtn.addEventListener("click", async () => {
+      setStatus("Placing canvas...");
+      // If in AR and reticle visible, use reticle pose
+      if (renderer.xr.enabled && xrSession && reticle && reticle.visible) {
+        // reticle.matrix contains world transform in reference space; decompose
+        const m = new THREE.Matrix4().copy(reticle.matrix);
+        const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+        m.decompose(pos, quat, scl);
+        const geo = await tryGetGeo();
+        await placeNewPlaneAtPose({ position: pos, orientation: quat }, geo);
+      } else {
+        // fallback: place in front of camera ~2.5m
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const pos = camera.position.clone().add(forward.multiplyScalar(2.5));
+        const quat = camera.quaternion.clone();
+        const geo = await tryGetGeo();
+        await placeNewPlaneAtPose({ position: pos, orientation: quat }, geo);
+      }
+    });
+
+    /* ===== Pointer / touch drawing (press-and-hold to spray) ===== */
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let activePlaneId = null;
+
+    // helper: attempt to find plane under screen point (client coords)
+    function pickPlaneAtClientXY(clientX, clientY) {
+      pointer.x = (clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      // gather plane meshes
+      const meshes = [];
+      planeObjects.forEach(v => { if (v.mesh) meshes.push(v.mesh); });
+      if (meshes.length === 0) return null;
+      const ints = raycaster.intersectObjects(meshes, false);
+      if (ints.length === 0) return null;
+      return ints[0]; // intersection
+    }
+
+    async function beginStrokeAtIntersection(int) {
+      if (!int) return;
+      const mesh = int.object;
+      // find planeId
+      let planeId = null;
+      for (const [k,v] of planeObjects) { if (v.mesh === mesh) { planeId = k; break; } }
+      if (!planeId) return;
+      activePlaneId = planeId;
+      const uv = int.uv;
+      currentStroke = { color: colorPicker.value || "#00ffd0", width: parseInt(brushRange.value || 12, 10) || 12, points: [{ u: uv.x, v: uv.y }] };
+      currentStrokeTmp = [{ u: uv.x, v: uv.y }];
+      lastSampleUV = { u: uv.x, v: uv.y };
+      // draw immediate point locally
+      drawStrokeOnPlane(planeId, { color: currentStroke.color, width: currentStroke.width, points: [currentStroke.points[0]] }, true);
+      // create stroke record in DB
+      const strokesRef = ref(db, `planes/${planeId}/strokes`);
+      const sRef = push(strokesRef);
+      await set(sRef, { color: currentStroke.color, width: currentStroke.width, createdAt: Date.now(), points: currentStroke.points });
+      currentStrokeRef = sRef;
+      lastStrokeId = sRef.key;
+    }
+
+    async function extendStrokeAtIntersection(int) {
+      if (!int || !activePlaneId || !currentStrokeRef) return;
+      const uv = int.uv;
+      // interpolate smooth between lastSampleUV and uv
+      const prev = lastSampleUV || { u: uv.x, v: uv.y };
+      const dx = uv.x - prev.u, dy = uv.y - prev.v;
+      const dist = Math.hypot(dx, dy);
+      const steps = Math.max(1, Math.floor(dist * 300));
+      for (let i=1;i<=steps;i++){
+        const t = i/Math.max(1,steps);
+        const iu = THREE.MathUtils.lerp(prev.u, uv.x, t);
+        const iv = THREE.MathUtils.lerp(prev.v, uv.y, t);
+        currentStroke.points.push({ u: iu, v: iv });
+        currentStrokeTmp.push({ u: iu, v: iv });
+      }
+      lastSampleUV = { u: uv.x, v: uv.y };
+      // draw incremental locally
+      const planeObj = planeObjects.get(activePlaneId);
+      if (planeObj) {
+        // draw small segment immediately
+        const pts = currentStrokeTmp.splice(0, currentStrokeTmp.length);
+        drawStrokeOnPlane(activePlaneId, { color: currentStroke.color, width: currentStroke.width, points: pts }, true);
+      }
+      // flush small batches to DB (append)
+      if (currentStrokeRef) {
+        // push points under points/ child under stroke (we'll use updates)
+        const pointsPath = `planes/${activePlaneId}/strokes/${currentStrokeRef.key}/points`;
+        // Do batched update to avoid many pushes (but keep payload small)
+        const updates = {};
+        for (const p of currentStroke.points.slice(-32)) {
+          const key = push(ref(db, pointsPath)).key;
+          updates[key] = { u: p.u, v: p.v, t: Date.now() };
+        }
         try {
-          // On modern iOS, DeviceOrientationEvent.requestPermission needs user gesture:
-          if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-            try {
-              const p = await DeviceOrientationEvent.requestPermission();
-              console.log("DeviceOrientation permission:", p);
-            } catch (e) { console.warn("DeviceOrientation request failed", e); }
+          await update(ref(db, pointsPath), updates);
+        } catch(e) { /* ignore */ }
+      }
+    }
+
+    async function finishStroke() {
+      if (!currentStroke || !activePlaneId || !currentStrokeRef) {
+        // reset state
+        drawing = false; activePlaneId = null; currentStroke = null; currentStrokeRef = null; lastSampleUV = null;
+        return;
+      }
+      // final flush: write remaining points (if server-side points structure used)
+      try {
+        // write remaining small buffer as updates
+        if (currentStrokeTmp.length > 0) {
+          const pointsPath = `planes/${activePlaneId}/strokes/${currentStrokeRef.key}/points`;
+          const updates = {};
+          for (const p of currentStrokeTmp.splice(0, currentStrokeTmp.length)) {
+            const key = push(ref(db, pointsPath)).key;
+            updates[key] = { u: p.u, v: p.v, t: Date.now() };
           }
-          // Start camera and orientation watchers
-          await startCamera(null);
-          startHeadingWatcher();
-          startOrientationWatcher();
-
-          // populate camera select if multiple
-          const cams = await getCameras();
-          if (cameraSelect && cams.length > 1) {
-            cameraSelect.style.display = "";
-            cameraSelect.innerHTML = "";
-            cams.forEach((c, i) => { const opt = document.createElement("option"); opt.value = c.deviceId; opt.text = c.label || ("Camera " + (i + 1)); cameraSelect.appendChild(opt); });
-            cameraSelect.addEventListener("change", async () => {
-              try { await startCamera(cameraSelect.value); updateStatus("Camera switched"); } catch (e) { console.warn("Camera switch failed", e); updateStatus("Camera switch failed"); }
-            });
-          }
-
-          updateStatus("Camera & motion enabled — Place Canvas");
-        } catch (e) {
-          console.error("Enable camera failed", e);
-          enableCameraBtn.disabled = false;
-          updateStatus("Camera permission required");
-          alert("Camera permission is required. Please allow camera access and try again.");
+          await update(ref(db, pointsPath), updates);
         }
-      });
-    } else {
-      // attempt implicit camera start (may be blocked)
-      (async () => {
-        try {
-          await startCamera(null);
-          startHeadingWatcher();
-          startOrientationWatcher();
-          updateStatus("Camera ready — Place Canvas");
-        } catch (e) {
-          console.warn("Implicit camera start failed", e);
-        }
-      })();
+      } catch(e) { console.warn("final stroke flush failed", e); }
+      drawing = false;
+      currentStroke = null;
+      currentStrokeRef = null;
+      activePlaneId = null;
+      lastSampleUV = null;
+      setStatus("Ready — hold screen to spray");
     }
 
-    /* ===== Place Canvas button ===== */
-    if (placeCanvasBtn) {
-      placeCanvasBtn.addEventListener("click", async () => {
-        if (!cameraEnabled) { updateStatus("Enable camera first"); return; }
-        placeCanvasBtn.disabled = true;
-        updateStatus("Placing canvas (sampling GPS)...");
-        try {
-          await createLocalPlaneAndPush();
-          updateStatus("Canvas placed! Hold screen to draw");
-        } catch (e) {
-          console.warn("createLocalPlane failed", e);
-          updateStatus("Placed without geo");
-        } finally {
-          placeCanvasBtn.disabled = false;
+    // pointer handlers (press-and-hold)
+    let pressHoldActive = false;
+    function onPointerDown(e) {
+      e.preventDefault();
+      pressHoldActive = true;
+      setStatus("Drawing...");
+      // pick immediate intersection
+      const int = pickPlaneAtClientXY(e.clientX, e.clientY);
+      if (int) {
+        beginStrokeAtIntersection(int).catch(console.warn);
+        // start sampling loop to continue sampling center reticle intersection while holding (use center crosshair)
+        samplingTimer = setInterval(() => {
+          // use center point (screen center) as aim when in AR; else continue using pointer coords
+          const cx = window.innerWidth/2, cy = window.innerHeight/2;
+          const i = pickPlaneAtClientXY(cx, cy);
+          if (i) extendStrokeAtIntersection(i).catch(console.warn);
+        }, sprayIntervalMs);
+      } else {
+        // if no plane hit at pointer down, try checking center reticle (AR) if available
+        const cx = window.innerWidth/2, cy = window.innerHeight/2;
+        const i = pickPlaneAtClientXY(cx, cy);
+        if (i) {
+          beginStrokeAtIntersection(i).catch(console.warn);
+          samplingTimer = setInterval(() => { const j = pickPlaneAtClientXY(cx, cy); if (j) extendStrokeAtIntersection(j).catch(console.warn); }, sprayIntervalMs);
+        } else {
+          setStatus("Aim at a placed canvas to draw");
+          pressHoldActive = false;
         }
-      });
+      }
     }
-
-    /* ===== Clear button ===== */
-    if (clearBtn) {
-      clearBtn.addEventListener("click", async () => {
-        if (!confirm("Clear all canvases? This will remove all drawings.")) return;
-        clearBtn.disabled = true;
-        updateStatus("Clearing all...");
-        try {
-          await set(ref(db, "planes"), null);
-          planeObjects.forEach(p => {
-            if (p.mesh) {
-              p.mesh.geometry.dispose();
-              if (p.mesh.material.map) p.mesh.material.map.dispose();
-              p.mesh.material.dispose();
-              scene.remove(p.mesh);
-            }
-            if (p.grid) { p.grid.geometry.dispose(); p.grid.material.dispose(); scene.remove(p.grid); }
-          });
-          planeObjects.clear();
-          localPlacedPlaneId = null;
-          localPlaneMesh = null;
-          lastStrokeId = null;
-          if (undoBtn) undoBtn.style.display = 'none';
-          updateStatus("Cleared all");
-        } catch (e) {
-          console.warn("Clear failed", e);
-          updateStatus("Clear failed");
-        } finally {
-          clearBtn.disabled = false;
-        }
-      });
+    function onPointerUp(e) {
+      e.preventDefault();
+      pressHoldActive = false;
+      clearInterval(samplingTimer); samplingTimer = null;
+      finishStroke().catch(console.warn);
     }
-
-    /* ===== Undo button ===== */
-    if (undoBtn) {
-      undoBtn.addEventListener("click", () => undoLastStroke());
-    }
-
-    /* ===== Input handlers (press & hold + volume + keyboard) ===== */
-    function onPointerDown(e) { e.preventDefault(); startSpraying().catch(err => console.warn(err)); }
-    function onPointerUp(e) { e.preventDefault(); stopSpraying().catch(err => console.warn(err)); }
 
     canvasEl.addEventListener("pointerdown", onPointerDown);
-    canvasEl.addEventListener("pointerup", onPointerUp);
-    canvasEl.addEventListener("pointercancel", onPointerUp);
-    canvasEl.addEventListener("pointerleave", onPointerUp);
+    window.addEventListener("pointerup", onPointerUp);
+    canvasEl.addEventListener("touchstart", (ev) => { if (ev.touches && ev.touches[0]) onPointerDown(ev.touches[0]); });
+    canvasEl.addEventListener("touchend", (ev) => onPointerUp(ev));
 
-    // keyboard + volume keys (best-effort)
+    // keyboard / volume fallback for triggering spray (helpful on some devices)
     window.addEventListener("keydown", (ev) => {
-      if ((ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") && !spraying && cameraEnabled) { ev.preventDefault(); startSpraying().catch(()=>{}); }
-      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") { if (!spraying && cameraEnabled) { ev.preventDefault(); startSpraying().catch(()=>{}); } }
+      if ((ev.code === "Space" || ev.code === "KeyZ") && !pressHoldActive) {
+        const fake = { clientX: window.innerWidth/2, clientY: window.innerHeight/2, preventDefault: ()=>{} };
+        onPointerDown(fake);
+      }
     });
     window.addEventListener("keyup", (ev) => {
-      if ((ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") && spraying) { ev.preventDefault(); stopSpraying().catch(()=>{}); }
-      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") { if (spraying) { ev.preventDefault(); stopSpraying().catch(()=>{}); } }
+      if (ev.code === "Space" || ev.code === "KeyZ") onPointerUp(ev);
     });
 
-    /* ===== Render loop: update reticle + draw ===== */
+    /* ===== Clear / Undo ===== */
+    clearBtn.addEventListener("click", async () => {
+      if (!confirm("Clear all canvases and strokes for everyone? This cannot be undone.")) return;
+      setStatus("Clearing...");
+      try {
+        await set(ref(db, "planes"), null);
+        planeObjects.forEach(p => {
+          try { p.mesh.geometry.dispose(); } catch(e){}
+          try { p.mesh.material.map?.dispose(); p.mesh.material.dispose(); } catch(e){}
+          scene.remove(p.mesh);
+          if (p.grid) scene.remove(p.grid);
+        });
+        planeObjects.clear();
+        localPlaneId = null;
+        setStatus("Cleared all");
+      } catch (e) {
+        console.warn("clear failed", e);
+        setStatus("Clear failed");
+      }
+    });
+
+    undoBtn.addEventListener("click", async () => {
+      if (!localPlaneId) { setStatus("No local canvas to undo"); return; }
+      if (!lastStrokeId) { setStatus("No stroke to undo"); return; }
+      try {
+        await remove(ref(db, `planes/${localPlaneId}/strokes/${lastStrokeId}`));
+        setStatus("Undone last stroke");
+        lastStrokeId = null;
+      } catch (e) {
+        console.warn("undo failed", e);
+        setStatus("Undo failed");
+      }
+    });
+
+    /* ===== Render loop (non-XR fallback) ===== */
     function renderLoop() {
       requestAnimationFrame(renderLoop);
-      const aim = computeReticlePointOnFloor();
-      if (aim) {
-        reticle.visible = true; reticle.position.copy(aim);
-        crosshair.visible = true; crosshair.position.copy(aim);
-      } else {
-        reticle.visible = false;
-        if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) {
-          const obj = planeObjects.get(localPlacedPlaneId);
-          crosshair.visible = true; crosshair.position.copy(obj.mesh.position);
-        } else {
-          crosshair.visible = false;
-        }
-      }
+      // update reticle position for non-XR: none
       renderer.render(scene, camera);
     }
     renderLoop();
@@ -735,11 +670,42 @@ if (window.__surfaceless_main_loaded) {
       camera.updateProjectionMatrix();
     });
 
-    /* ===== Visibility change: stop spraying when hidden ===== */
-    document.addEventListener("visibilitychange", () => { if (document.hidden && spraying) stopSpraying().catch(()=>{}); });
+    /* ===== Network connection indicator ===== */
+    const connectedRef = ref(db, ".info/connected");
+    onValue(connectedRef, (snap) => {
+      const c = snap.val();
+      if (networkStatusEl) {
+        networkStatusEl.className = c ? "connected" : "offline";
+        networkStatusEl.style.background = c ? "#0f0" : "#f44";
+      }
+    });
 
-    /* ===== Init status ===== */
-    updateStatus("Tap Enable Cam to start");
-    console.log("AR Graffiti app loaded (full).");
+    /* ===== UI wiring: Enter AR button ===== */
+    enterArBtn.addEventListener("click", async () => {
+      setStatus("Starting AR...");
+      await startARSession();
+    });
+
+    // initial UI state
+    setStatus("Ready — Enter AR or place a canvas (fallback camera)");
+    placePlaneBtn.style.display = "none";
+
+    // try to start fallback camera implicitly (so Android/iOS can get camera)
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+        // attach to fallback video element (hidden if AR)
+        if (fallbackVideoEl) {
+          fallbackVideoEl.srcObject = stream;
+          try { await fallbackVideoEl.play(); } catch(e){ /* ignore autoplay block */ }
+        }
+        setStatus("Camera ready — press Enter AR or Place Canvas");
+      } catch (e) {
+        // user will need to tap Enter AR to grant permissions for XR or camera
+        console.warn("implicit camera start failed (user may need to tap):", e);
+      }
+    })();
+
+    console.log("AR Graffiti module loaded");
   }); // DOMContentLoaded
-} // guard
+} // double-run guard
