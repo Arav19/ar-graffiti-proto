@@ -1,72 +1,57 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Surfaceless AR Stickers</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>SurfaceLess — AR Stickers</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      font-family: system-ui, sans-serif;
-      background: black;
-      color: white;
-      touch-action: none;
-    }
-    #drawSection, #arSection {
-      position: fixed;
-      inset: 0;
-      display: none;
-      justify-content: center;
-      align-items: center;
-      flex-direction: column;
-    }
-    canvas {
-      width: 100%;
-      height: 100%;
-      touch-action: none;
-    }
-    #ui {
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 10px;
-    }
-    button {
-      padding: 10px 20px;
-      border: 1px solid #fff;
-      background: rgba(255,255,255,0.1);
-      color: white;
-      border-radius: 8px;
-    }
-    #status {
-      position: fixed;
-      top: 10px;
-      width: 100%;
-      text-align: center;
-    }
+    html,body { margin:0; height:100%; background:#000; color:#fff; font-family:Inter, Arial, sans-serif; -webkit-user-select:none; user-select:none; }
+    #app { position:relative; width:100%; height:100%; overflow:hidden; }
+    /* video background (fallback) */
+    video#fallbackVideo { position: absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:0; background:#000; display:none; }
+    canvas#three-canvas { position:absolute; inset:0; width:100%; height:100%; z-index:1; touch-action:none; display:block; }
+    /* UI */
+    #uiTop { position:fixed; left:12px; top:12px; z-index:10; display:flex; gap:8px; align-items:center; }
+    .btn { padding:8px 12px; border-radius:8px; border:none; background: rgba(255,255,255,0.08); color:#fff; cursor:pointer }
+    .btn.primary { background: rgba(0,200,140,0.15); color:#00ffd0; }
+    #status { margin-left:8px; font-size:13px; opacity:0.95; }
+    /* draw UI */
+    #drawPanel { position:fixed; right:12px; top:12px; z-index:11; background: rgba(0,0,0,0.6); padding:8px; border-radius:8px; }
+    canvas#drawCanvas { background:#111; border:1px solid rgba(255,255,255,0.06); width:270px; height:270px; touch-action:none; }
+    input[type=color] { width:42px; height:42px; border-radius:8px; border:none; padding:0; }
+    input[type=range] { width:110px; }
+    /* small helper */
+    #help { position:fixed; left:12px; bottom:12px; z-index:10; color:#ccc; font-size:13px; background: rgba(0,0,0,0.45); padding:6px 10px; border-radius:8px; }
   </style>
 </head>
 <body>
-  <div id="status">Loading...</div>
+  <div id="app">
+    <video id="fallbackVideo" autoplay playsinline muted></video>
+    <canvas id="three-canvas"></canvas>
 
-  <div id="drawSection">
-    <canvas id="drawCanvas"></canvas>
-    <div id="ui">
-      <button id="clearBtn">Clear</button>
-      <button id="saveBtn">Save Sticker</button>
+    <div id="uiTop">
+      <button id="enterArBtn" class="btn primary">Enter AR</button>
+      <button id="placeBtn" class="btn" style="display:none">Place Sticker (GPS)</button>
+      <button id="exitArBtn" class="btn" style="display:none">Exit AR</button>
+      <button id="clearAllBtn" class="btn" title="Clear all (DB)">Clear All</button>
+      <div id="status">Ready — draw a sticker, save, then place</div>
     </div>
+
+    <div id="drawPanel">
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+        <button id="clearDrawBtn" class="btn">Clear</button>
+        <button id="saveBtn" class="btn primary">Save & Enter AR</button>
+      </div>
+      <canvas id="drawCanvas" width="512" height="512"></canvas>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+        <input id="colorPicker" type="color" value="#00ffd0" />
+        <input id="sizeRange" type="range" min="2" max="60" value="10" />
+      </div>
+    </div>
+
+    <div id="help">Draw a sticker → Save → Enter AR → Place (GPS) or use WebXR hit-test if available.</div>
   </div>
 
-  <div id="arSection">
-    <div id="ui">
-      <button id="enterAR">Enter AR</button>
-      <button id="placeBtn" style="display:none">Place Sticker</button>
-    </div>
-  </div>
-
-  <script type="module" src="main.js"></script>
+  <script type="module" src="./main.js"></script>
 </body>
 </html>
