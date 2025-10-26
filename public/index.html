@@ -21,6 +21,8 @@
       width: 100vw;
       height: 100vh;
       overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     video#camera-feed {
@@ -41,60 +43,97 @@
       width: 100%;
       height: 100%;
       z-index: 1;
+      touch-action: none;
     }
 
     #ui {
       position: absolute;
-      bottom: 20px;
+      bottom: env(safe-area-inset-bottom,20px);
       left: 50%;
       transform: translateX(-50%);
-      z-index: 5;
+      z-index: 6;
       display: flex;
-      gap: 12px;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 96%;
+      padding: 6px;
     }
 
-    button {
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, a0.2);
+    .btn {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
       color: white;
       font-family: monospace;
-      padding: 10px 20px;
+      padding: 8px 12px;
       border-radius: 8px;
       cursor: pointer;
-      transition: all 0.2s ease;
+      min-width: 92px;
+      text-align: center;
     }
 
-    button:hover {
-      background: rgba(255, 255, 255, 0.3);
+    .small {
+      padding: 6px 8px;
+      min-width: 64px;
     }
 
     #status {
       position: absolute;
-      top: 20px;
+      top: 14px;
       left: 50%;
       transform: translateX(-50%);
       color: white;
       font-family: monospace;
-      z-index: 5;
+      z-index: 7;
+      text-align: center;
+      background: rgba(0,0,0,0.25);
+      padding: 6px 10px;
+      border-radius: 8px;
+      max-width: 90%;
+    }
+
+    #controls-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    input[type="color"], input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 36px;
+      border-radius: 8px;
+      border: none;
+      padding: 4px;
     }
   </style>
 </head>
 
 <body>
   <div id="ar-container">
-    <video id="camera-feed" autoplay playsinline></video>
+    <video id="camera-feed" autoplay playsinline muted></video>
     <canvas id="three-canvas"></canvas>
 
     <div id="ui">
-      <button id="startBtn">Start Drawing</button>
-      <button id="stopBtn">Stop Drawing</button>
-      <button id="clearBtn">Clear All</button>
+      <div id="controls-row">
+        <button id="enableCameraBtn" class="btn small">Enable Cam</button>
+        <select id="cameraSelect" style="display:none" class="small"></select>
+
+        <button id="placeCanvasBtn" class="btn">Place Canvas</button>
+        <button id="startBtn" class="btn" disabled>Start Draw</button>
+        <button id="stopBtn" class="btn" style="display:none">Stop</button>
+        <button id="clearBtn" class="btn">Clear All</button>
+
+        <input id="colorPicker" type="color" value="#00ffd0" title="Brush color">
+        <input id="brushRange" type="range" min="4" max="60" value="12" title="Brush size">
+      </div>
     </div>
 
     <div id="status">Initializing...</div>
   </div>
 
-  <!-- Import main logic -->
   <script type="module" src="./main.js"></script>
 </body>
 </html>
