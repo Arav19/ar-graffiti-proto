@@ -3,119 +3,374 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
-  <title>Surfaceless AR Graffiti — Floor Canvas</title>
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
+  <title>Surfaceless AR Graffiti</title>
 
   <style>
-    /* Basic layout */
-    html,body { height:100%; width:100%; margin:0; padding:0; background:#000; overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; }
-    #ar-container { position:relative; width:100vw; height:100vh; overflow:hidden; }
-
-    /* camera video behind everything */
-    video#camera-feed {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: cover;
-      z-index: 0;
-      background: black;
+    * {
+      box-sizing: border-box;
     }
 
-    /* three canvas on top of video */
+    html, body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000;
+      overflow: hidden;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', monospace;
+    }
+    
+    #ar-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    video#camera-feed {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0;
+      background: #000;
+    }
+    
     canvas#three-canvas {
       position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
+      inset: 0;
+      width: 100%;
+      height: 100%;
       z-index: 1;
       touch-action: none;
     }
-
-    /* UI on top */
+    
+    /* UI Controls at bottom */
     #ui {
       position: absolute;
-      bottom: env(safe-area-inset-bottom, 18px);
+      bottom: calc(env(safe-area-inset-bottom, 18px) + 8px);
       left: 50%;
       transform: translateX(-50%);
       z-index: 6;
       display: flex;
       gap: 8px;
       align-items: center;
-      padding: 6px;
-      pointer-events: auto;
+      padding: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 95vw;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 16px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
     }
-
+    
     .btn {
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
       color: #fff;
-      font-family: monospace;
-      padding: 8px 12px;
+      font-family: inherit;
+      padding: 10px 14px;
       border-radius: 10px;
       cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      white-space: nowrap;
     }
-    .btn.small { padding:6px 8px; font-size:14px; }
-
+    
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      transform: translateY(-1px);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+      background: rgba(255, 255, 255, 0.2);
+    }
+    
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .btn.small {
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    
+    .btn.primary {
+      background: rgba(0, 255, 208, 0.15);
+      border-color: rgba(0, 255, 208, 0.3);
+      color: #00ffd0;
+    }
+    
+    .btn.danger {
+      background: rgba(255, 80, 80, 0.15);
+      border-color: rgba(255, 80, 80, 0.3);
+      color: #ff5050;
+    }
+    
+    /* Status bar at top */
     #status {
       position: absolute;
-      top: 14px;
+      top: calc(env(safe-area-inset-top, 14px) + 8px);
       left: 50%;
       transform: translateX(-50%);
       z-index: 7;
       color: #fff;
-      font-family: monospace;
-      background: rgba(0,0,0,0.28);
-      padding: 6px 10px;
-      border-radius: 8px;
-      pointer-events: none;
+      font-family: inherit;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      max-width: 90vw;
+      text-align: center;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
-
+    
+    #status.connected {
+      border-color: rgba(0, 255, 208, 0.3);
+    }
+    
+    #status.offline {
+      border-color: rgba(255, 80, 80, 0.3);
+      color: #ff5050;
+    }
+    
+    /* Hint text above controls */
     #hint {
       position: absolute;
-      bottom: 86px;
+      bottom: calc(env(safe-area-inset-bottom, 18px) + 75px);
       left: 50%;
       transform: translateX(-50%);
       z-index: 7;
-      color: rgba(255,255,255,0.9);
-      font-family: monospace;
-      background: rgba(0,0,0,0.25);
-      padding: 6px 10px;
+      color: rgba(255, 255, 255, 0.85);
+      font-family: inherit;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 8px 12px;
       border-radius: 8px;
       pointer-events: none;
+      font-size: 12px;
       text-align: center;
-      max-width: 90%;
+      max-width: 85vw;
+      line-height: 1.4;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
-
-    input[type="color"], input[type="range"], select {
+    
+    /* Color picker styling */
+    input[type="color"] {
       background: transparent;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      outline: none;
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      cursor: pointer;
+      padding: 3px;
+      transition: border-color 0.2s;
+    }
+    
+    input[type="color"]:hover {
+      border-color: rgba(255, 255, 255, 0.4);
+    }
+    
+    /* Range slider styling */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+      outline: none;
+      width: 90px;
+      height: 42px;
+      cursor: pointer;
+    }
+    
+    input[type="range"]::-webkit-slider-track {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+    }
+    
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      background: #00ffd0;
+      border-radius: 50%;
+      cursor: pointer;
+      margin-top: -7px;
+      box-shadow: 0 2px 8px rgba(0, 255, 208, 0.4);
+    }
+    
+    input[type="range"]::-moz-range-track {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+    }
+    
+    input[type="range"]::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      background: #00ffd0;
+      border-radius: 50%;
+      cursor: pointer;
       border: none;
-      color: white;
-      font-family: monospace;
+      box-shadow: 0 2px 8px rgba(0, 255, 208, 0.4);
+    }
+    
+    /* Network status indicator */
+    #networkStatus {
+      position: absolute;
+      top: calc(env(safe-area-inset-top, 14px) + 16px);
+      right: 16px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #0f0;
+      z-index: 7;
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.6);
+      transition: all 0.3s ease;
+    }
+    
+    #networkStatus.offline {
+      background: #f44;
+      box-shadow: 0 0 10px rgba(255, 68, 68, 0.6);
+      animation: pulse-offline 1s ease-in-out infinite;
+    }
+    
+    @keyframes pulse-offline {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    
+    /* Camera select dropdown */
+    select {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      font-family: inherit;
+      padding: 8px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      outline: none;
+    }
+    
+    select option {
+      background: #1a1a1a;
+      color: #fff;
+    }
+    
+    /* Divider for visual separation */
+    .divider {
+      width: 1px;
+      height: 30px;
+      background: rgba(255, 255, 255, 0.15);
+      margin: 0 4px;
+    }
+    
+    /* Loading animation for status */
+    @keyframes dot-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    
+    .loading::after {
+      content: '...';
+      animation: dot-pulse 1.5s ease-in-out infinite;
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 480px) {
+      #ui {
+        gap: 6px;
+        padding: 6px;
+      }
+      
+      .btn {
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+      
+      .btn.small {
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      
+      input[type="range"] {
+        width: 70px;
+      }
+      
+      #hint {
+        font-size: 11px;
+        padding: 6px 10px;
+      }
+    }
+    
+    /* Prevent text selection on mobile */
+    input, select, button {
+      -webkit-tap-highlight-color: transparent;
     }
   </style>
 </head>
 <body>
   <div id="ar-container">
-    <!-- Video for camera feed -->
+    <!-- Camera video feed -->
     <video id="camera-feed" autoplay playsinline muted></video>
-
-    <!-- Three.js canvas -->
+    
+    <!-- THREE.js canvas overlay -->
     <canvas id="three-canvas"></canvas>
 
-    <!-- Controls -->
+    <!-- Top status bar -->
+    <div id="status" class="connected">Initializing...</div>
+    
+    <!-- Network connection indicator -->
+    <div id="networkStatus" class="connected"></div>
+    
+    <!-- Hint text -->
+    <div id="hint">Hold screen (or Space/Volume keys) to spray • Place Canvas to anchor location</div>
+
+    <!-- Bottom UI controls -->
     <div id="ui">
-      <button id="enableCameraBtn" class="btn small">Enable Cam</button>
-      <select id="cameraSelect" class="btn small" style="display:none;"></select>
-
-      <button id="placeCanvasBtn" class="btn">Place Canvas</button>
-      <button id="clearBtn" class="btn">Clear All</button>
-
+      <!-- Camera controls -->
+      <button id="enableCameraBtn" class="btn small primary">Enable Cam</button>
+      <select id="cameraSelect" style="display:none" class="small"></select>
+      
+      <div class="divider"></div>
+      
+      <!-- Canvas placement -->
+      <button id="placeCanvasBtn" class="btn primary">Place Canvas</button>
+      
+      <div class="divider"></div>
+      
+      <!-- Drawing tools -->
       <input id="colorPicker" type="color" value="#00ffd0" title="Brush color" />
       <input id="brushRange" type="range" min="4" max="60" value="12" title="Brush size" />
+      
+      <div class="divider"></div>
+      
+      <!-- Actions -->
+      <button id="undoBtn" class="btn small" style="display:none">Undo</button>
+      <button id="clearBtn" class="btn small danger">Clear All</button>
     </div>
-
-    <div id="status">Initializing...</div>
-    <div id="hint">Tap <b>Enable Cam</b> (required). Hold screen to spray. Place Canvas pins location for others.</div>
   </div>
 
+  <!-- Main app script -->
   <script type="module" src="./main.js"></script>
 </body>
 </html>
