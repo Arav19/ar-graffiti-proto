@@ -3,75 +3,68 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Surfaceless - AR Graffiti</title>
+  <title>Surfaceless AR Stickers</title>
   <style>
     body {
       margin: 0;
       overflow: hidden;
-      background: #000;
-      color: #fff;
-      font-family: sans-serif;
-    }
-
-    #drawSection, #arSection {
-      display: none;
-      text-align: center;
-      height: 100vh;
-      width: 100vw;
-    }
-
-    #drawCanvas {
-      border: 2px solid #fff;
-      background: #000;
-      margin-top: 10px;
+      font-family: system-ui, sans-serif;
+      background: black;
+      color: white;
       touch-action: none;
     }
-
-    button {
-      background: rgba(255,255,255,0.1);
-      color: #fff;
-      border: 1px solid #fff;
-      border-radius: 10px;
-      padding: 10px 20px;
-      margin: 5px;
-      cursor: pointer;
-      font-size: 16px;
+    #drawSection, #arSection {
+      position: fixed;
+      inset: 0;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
     }
-
-    #enterAR, #placeBtn {
+    canvas {
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+    #ui {
       position: absolute;
       bottom: 20px;
       left: 50%;
       transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
     }
-
+    button {
+      padding: 10px 20px;
+      border: 1px solid #fff;
+      background: rgba(255,255,255,0.1);
+      color: white;
+      border-radius: 8px;
+    }
     #status {
-      position: absolute;
+      position: fixed;
       top: 10px;
       width: 100%;
       text-align: center;
-      color: #0f0;
-      font-size: 14px;
     }
   </style>
 </head>
 <body>
-
   <div id="status">Loading...</div>
 
-  <!-- Drawing UI -->
   <div id="drawSection">
-    <h2>Draw your graffiti sticker</h2>
-    <canvas id="drawCanvas" width="400" height="400"></canvas>
-    <br />
-    <button id="clearBtn">Clear</button>
-    <button id="saveBtn">Save & Enter AR</button>
+    <canvas id="drawCanvas"></canvas>
+    <div id="ui">
+      <button id="clearBtn">Clear</button>
+      <button id="saveBtn">Save Sticker</button>
+    </div>
   </div>
 
-  <!-- AR Placement UI -->
   <div id="arSection">
-    <button id="enterAR">Enter AR</button>
-    <button id="placeBtn">Place Sticker</button>
+    <div id="ui">
+      <button id="enterAR">Enter AR</button>
+      <button id="placeBtn" style="display:none">Place Sticker</button>
+    </div>
   </div>
 
   <script type="module" src="main.js"></script>
