@@ -462,3 +462,383 @@ if (window.__surfaceless_main_loaded) {
       flushTimeout = setTimeout(() => {
         if (strokeBuffer.length > 0 && currentStrokeId) {
           const flush = strokeBuffer.splice(0, strokeBuffer.length);
+          pushPointsForStroke(localPlacedPlaneId, currentStrokeId, flush)
+            .catch(e => console.warn("Failed to push points:", e));
+        }
+      }, 100);
+    }
+
+    async function startSpraying() {
+      if (spraying) return;
+      
+      if (!cameraEnabled) {
+        updateStatus("Enable camera first");
+        return;
+      }
+      
+      if (!localPlacedPlaneId) {
+        updateStatus("Placing canvas...");
+        try {
+          await createLocalPlaneAndPush();
+          updateStatus("Drawing...");
+        } catch (e) {
+          console.error("Failed to create plane:", e);
+          updateStatus("Failed to create canvas");
+          return;
+        }
+      }
+      
+      spraying = true;
+      lastSamplePoint = null;
+      strokeBuffer = [];
+      
+      const color = colorPicker?.value || "#00ffd0";
+      const width = parseInt(brushRange?.value || 12, 10) || 12;
+      
+      try {
+        currentStrokeId = await createStrokeForPlane(localPlacedPlaneId, color, width);
+        samplingTimer = setInterval(sampleAndPaint, 50);
+        updateStatus("Drawing...");
+      } catch (e) {
+        console.error("Failed to start stroke:", e);
+        spraying = false;
+        updateStatus("Failed to start drawing");
+      }
+    }
+
+    async function stopSpraying() {
+      if (!spraying) return;
+      
+      spraying = false;
+      
+      if (samplingTimer) {
+        clearInterval(samplingTimer);
+        samplingTimer = null;
+      }
+      
+      clearTimeout(flushTimeout);
+      
+      // Final flush
+      if (strokeBuffer.length > 0 && currentStrokeId) {
+        const buf = strokeBuffer.splice(0, strokeBuffer.length);
+        await pushPointsForStroke(localPlacedPlaneId, currentStrokeId, buf)
+          .catch(e => console.warn("Failed to flush stroke:", e));
+      }
+      
+      currentStrokeId = null;
+      lastSamplePoint = null;
+      
+      updateStatus("Ready to draw");
+    }
+
+    /* ===== Undo last stroke ===== */
+    async function undoLastStroke() {
+      if (!lastStrokeId || !localPlacedPlaneId) {
+        updateStatus("Nothing to undo");
+        return;
+      }
+      
+      try {
+        const strokeRef = ref(db, `planes/${localPlacedPlaneId}/strokes/${lastStrokeId}`);
+        await remove(strokeRef);
+        
+        // Clear and redraw canvas
+        const planeObj = planeObjects.get(localPlacedPlaneId);
+        if (planeObj && planeObj.mesh.userData.ctx) {
+          const ctx = planeObj.mesh.userData.ctx;
+          ctx.clearRect(0, 0, planeObj.mesh.userData.w, planeObj.mesh.userData.h);
+          planeObj.mesh.userData.tex.needsUpdate = true;
+          planeObj.mesh.userData.renderedStrokes.clear();
+        }
+        
+        lastStrokeId = null;
+        updateStatus("Undone");
+      } catch (e) {
+        console.warn("Failed to undo:", e);
+        updateStatus("Undo failed");
+      }
+    }
+
+    /* ===== Camera functions ===== */
+    async function getCameras() {
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        return devs.filter(d => d.kind === 'videoinput');
+      } catch (e) {
+        console.warn("Failed to enumerate devices:", e);
+        return [];
+      }
+    }
+
+    async function startCamera(deviceId = null) {
+      try {
+        if (camStream) {
+          camStream.getTracks().forEach(t => t.stop());
+          camStream = null;
+        }
+        
+        const constraints = deviceId 
+          ? { video: { deviceId: { exact: deviceId }, facingMode: { ideal: "environment" } }, audio: false }
+          : { video: { facingMode: { ideal: "environment" } }, audio: false };
+        
+        console.log("Requesting camera with constraints:", constraints);
+        camStream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log("Camera stream obtained");
+        
+        if (!camVideo) {
+          camVideo = document.createElement('video');
+          camVideo.id = "camVideo";
+          camVideo.autoplay = true;
+          camVideo.playsInline = true;
+          camVideo.muted = true;
+          camVideo.style.position = 'absolute';
+          camVideo.style.inset = '0';
+          camVideo.style.width = '100%';
+          camVideo.style.height = '100%';
+          camVideo.style.objectFit = 'cover';
+          camVideo.style.zIndex = '0';
+          document.getElementById("ar-container")?.appendChild(camVideo);
+        }
+        
+        camVideo.srcObject = camStream;
+        
+        await camVideo.play();
+        console.log("Camera playing");
+        
+        cameraEnabled = true;
+        updateStatus("Camera ready — tap Place Canvas");
+        
+      } catch (err) {
+        console.error("Camera start failed:", err);
+        throw err;
+      }
+    }
+
+    /* ===== Enable Camera button ===== */
+    if (enableCameraBtn) {
+      enableCameraBtn.addEventListener("click", async () => {
+        console.log("Enable camera button clicked");
+        enableCameraBtn.disabled = true;
+        updateStatus("Requesting permissions...");
+        
+        try {
+          // Request device orientation permission on iOS
+          if (typeof DeviceMotionEvent !== "undefined" && 
+              typeof DeviceMotionEvent.requestPermission === "function") {
+            try {
+              const p = await DeviceMotionEvent.requestPermission();
+              console.log("Device motion permission:", p);
+            } catch (e) {
+              console.warn("Device motion permission error:", e);
+            }
+          }
+          
+          if (typeof DeviceOrientationEvent !== "undefined" && 
+              typeof DeviceOrientationEvent.requestPermission === "function") {
+            try {
+              const p = await DeviceOrientationEvent.requestPermission();
+              console.log("Device orientation permission:", p);
+            } catch (e) {
+              console.warn("Device orientation permission error:", e);
+            }
+          }
+          
+          await startCamera(null);
+          
+          const cams = await getCameras();
+          if (cameraSelect && cams.length > 1) {
+            cameraSelect.style.display = "";
+            cameraSelect.innerHTML = "";
+            
+            cams.forEach((c, idx) => {
+              const opt = document.createElement("option");
+              opt.value = c.deviceId;
+              opt.text = c.label || ("Camera " + (idx + 1));
+              cameraSelect.appendChild(opt);
+            });
+            
+            cameraSelect.addEventListener("change", async () => {
+              try {
+                await startCamera(cameraSelect.value);
+                updateStatus("Camera switched");
+              } catch (e) {
+                console.warn("Failed to switch camera:", e);
+                updateStatus("Camera switch failed");
+              }
+            });
+          }
+          
+          startOrientationWatcher();
+          
+        } catch (err) {
+          console.error("Camera/motion permission failed:", err);
+          enableCameraBtn.disabled = false;
+          updateStatus("Camera permission denied — tap to retry");
+          alert("Camera permission is required. Please allow camera access and try again.");
+        }
+      });
+    }
+
+    /* ===== Place Canvas button ===== */
+    if (placeCanvasBtn) {
+      placeCanvasBtn.addEventListener("click", async () => {
+        if (!cameraEnabled) {
+          updateStatus("Enable camera first");
+          return;
+        }
+        
+        placeCanvasBtn.disabled = true;
+        updateStatus("Placing canvas...");
+        
+        try {
+          await createLocalPlaneAndPush();
+          updateStatus("Canvas placed! Hold screen to draw");
+        } catch (e) {
+          console.error("Failed to place canvas:", e);
+          updateStatus("Failed to place canvas");
+        } finally {
+          placeCanvasBtn.disabled = false;
+        }
+      });
+    }
+
+    /* ===== Clear button ===== */
+    if (clearBtn) {
+      clearBtn.addEventListener("click", async () => {
+        if (!confirm("Clear all canvases? This cannot be undone.")) return;
+        
+        clearBtn.disabled = true;
+        updateStatus("Clearing...");
+        
+        try {
+          await set(ref(db, "planes"), null);
+          
+          planeObjects.forEach(p => {
+            p.mesh.geometry.dispose();
+            p.mesh.material.map.dispose();
+            p.mesh.material.dispose();
+            scene.remove(p.mesh);
+            
+            if (p.grid) {
+              p.grid.geometry.dispose();
+              p.grid.material.dispose();
+              scene.remove(p.grid);
+            }
+          });
+          
+          planeObjects.clear();
+          localPlacedPlaneId = null;
+          lastStrokeId = null;
+          
+          if (undoBtn) undoBtn.style.display = 'none';
+          
+          updateStatus("All cleared");
+          
+        } catch (e) {
+          console.warn("Clear failed:", e);
+          updateStatus("Clear failed");
+        } finally {
+          clearBtn.disabled = false;
+        }
+      });
+    }
+
+    /* ===== Undo button ===== */
+    if (undoBtn) {
+      undoBtn.addEventListener("click", () => {
+        undoLastStroke();
+      });
+    }
+
+    /* ===== Input handlers ===== */
+    function onPointerDown(e) {
+      e.preventDefault();
+      startSpraying().catch(err => console.warn("Start spray failed:", err));
+    }
+    
+    function onPointerUp(e) {
+      e.preventDefault();
+      stopSpraying().catch(err => console.warn("Stop spray failed:", err));
+    }
+
+    canvasEl.addEventListener("pointerdown", onPointerDown);
+    canvasEl.addEventListener("pointerup", onPointerUp);
+    canvasEl.addEventListener("pointercancel", onPointerUp);
+    canvasEl.addEventListener("pointerleave", onPointerUp);
+
+    // Keyboard fallback
+    window.addEventListener("keydown", (ev) => {
+      if (ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") {
+        if (!spraying && cameraEnabled) {
+          ev.preventDefault();
+          startSpraying().catch(() => {});
+        }
+      }
+    });
+    
+    window.addEventListener("keyup", (ev) => {
+      if (ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") {
+        if (spraying) {
+          ev.preventDefault();
+          stopSpraying().catch(() => {});
+        }
+      }
+    });
+
+    // Volume keys
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") {
+        if (!spraying && cameraEnabled) {
+          ev.preventDefault();
+          startSpraying().catch(() => {});
+        }
+      }
+    });
+    
+    window.addEventListener("keyup", (ev) => {
+      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") {
+        if (spraying) {
+          ev.preventDefault();
+          stopSpraying().catch(() => {});
+        }
+      }
+    });
+
+    /* ===== Render loop ===== */
+    function renderLoop() {
+      requestAnimationFrame(renderLoop);
+      
+      const aim = computeReticlePointOnFloor();
+      
+      if (aim) {
+        reticle.visible = true;
+        reticle.position.copy(aim);
+      } else {
+        reticle.visible = false;
+      }
+      
+      renderer.render(scene, camera);
+    }
+    
+    renderLoop();
+
+    /* ===== Window resize ===== */
+    window.addEventListener("resize", () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    /* ===== Visibility change handler ===== */
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && spraying) {
+        stopSpraying().catch(() => {});
+      }
+    });
+
+    // Final ready state
+    updateStatus("Tap Enable Cam to start");
+    console.log("AR Graffiti app loaded successfully");
+    
+  }); // DOMContentLoaded
+} // double-run guard
