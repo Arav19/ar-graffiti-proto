@@ -1,5 +1,8 @@
 // public/main.js
-// FIXED: Canvas locked to floor, 2D drawing on floor plane, proper device orientation
+// Full app: Floor-locked 2D canvas drawing anchored by GPS + realtime Firebase sync
+// Uses Three.js (module) + Firebase Realtime DB (v11 modular).
+// Replaces older main.js — single-file, defensive, DOMContentLoaded wrapper.
+
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import {
@@ -14,7 +17,7 @@ import {
   onValue
 } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
 
-/* ===== FIREBASE CONFIG ===== */
+/* ===== FIREBASE CONFIG (your project) ===== */
 const firebaseConfig = {
   apiKey: "AIzaSyBCzRpUX5mexhGj5FzqEWKoFAdljNJdbHE",
   authDomain: "surfaceless-firebase.firebaseapp.com",
@@ -24,19 +27,18 @@ const firebaseConfig = {
   messagingSenderId: "91893983357",
   appId: "1:91893983357:web:a823ba9f5874bede8b6914"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const planesRef = ref(db, "planes");
 
-/* ===== Prevent double execution ===== */
+/* ===== Prevent duplicate execution (extensions / HMR) ===== */
 if (window.__surfaceless_main_loaded) {
   console.warn("main.js already executed — skipping");
 } else {
   window.__surfaceless_main_loaded = true;
 
   window.addEventListener("DOMContentLoaded", () => {
-    console.log("Starting AR Graffiti app");
+    console.log("Starting AR Graffiti app (fixed anchor + yaw + 2D paint)");
 
     /* ===== DOM elements ===== */
     const enableCameraBtn = document.getElementById("enableCameraBtn");
@@ -52,18 +54,18 @@ if (window.__surfaceless_main_loaded) {
     const canvasEl = document.getElementById("three-canvas");
 
     if (!canvasEl) {
-      console.error("Missing #three-canvas");
+      console.error("Missing #three-canvas in DOM. Aborting.");
+      if (statusEl) statusEl.textContent = "Missing canvas element";
       return;
     }
 
-    function updateStatus(text) {
-      if (statusEl) statusEl.textContent = text;
-    }
+    function updateStatus(text) { if (statusEl) statusEl.textContent = text; }
 
+    /* ===== small helpers ===== */
     function getUniqueUserId() {
       let uid = localStorage.getItem("surfaceless_uid");
       if (!uid) {
-        uid = "user_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+        uid = "user_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
         localStorage.setItem("surfaceless_uid", uid);
       }
       return uid;
@@ -74,13 +76,9 @@ if (window.__surfaceless_main_loaded) {
     let camStream = null;
     let cameraEnabled = false;
 
-    /* ===== THREE.js setup ===== */
-    const renderer = new THREE.WebGLRenderer({ 
-      canvas: canvasEl, 
-      antialias: true, 
-      alpha: true 
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    /* ===== Three.js setup ===== */
+    const renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0x000000, 0);
     renderer.outputEncoding = THREE.sRGBEncoding;
@@ -88,42 +86,47 @@ if (window.__surfaceless_main_loaded) {
     const scene = new THREE.Scene();
     scene.background = null;
 
-    // Camera at eye level (1.6m above floor)
-    const camera = new THREE.PerspectiveCamera(
-      70, 
-      window.innerWidth / window.innerHeight, 
-      0.01, 
-      1000
-    );
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 1000);
     camera.position.set(0, 1.6, 0);
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
     scene.add(hemi);
 
-    /* ===== Reticle on floor ===== */
-    function makeReticle(r = 0.12) {
-      const geo = new THREE.RingGeometry(r * 0.85, r, 32);
-      geo.rotateX(-Math.PI / 2); // Lie flat on floor
-      const mat = new THREE.MeshBasicMaterial({ 
-        color: 0x00ffff, 
-        transparent: true, 
-        opacity: 0.9,
-        side: THREE.DoubleSide
-      });
+    /* ===== Reticle + crosshair + grid helpers ===== */
+    function makeReticle(radius = 0.12) {
+      const geo = new THREE.RingGeometry(radius * 0.85, radius, 32);
+      geo.rotateX(-Math.PI / 2);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.95, side: THREE.DoubleSide });
       const m = new THREE.Mesh(geo, mat);
       m.visible = false;
       scene.add(m);
       return m;
     }
+    function makeCross(radius = 0.06) {
+      const geo = new THREE.CircleGeometry(radius, 24);
+      geo.rotateX(-Math.PI / 2);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x00ffd0, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
+      const m = new THREE.Mesh(geo, mat);
+      m.visible = false;
+      scene.add(m);
+      return m;
+    }
+    function makeGridMesh(size = 5, divisions = 10) {
+      const g = new THREE.GridHelper(size, divisions, 0x00ffff, 0x004444);
+      g.material.opacity = 0.25;
+      g.material.transparent = true;
+      g.rotation.x = -Math.PI / 2;
+      g.position.y = 0.001;
+      return g;
+    }
 
     const reticle = makeReticle(0.12);
+    const crosshair = makeCross(0.06);
 
-    /* ===== Drawing plane (LOCKED TO FLOOR Y=0) ===== */
-    function createDrawingPlaneMesh(widthMeters = 5, heightMeters = 5) {
-      const texSize = 2048;
+    /* ===== Drawing plane (canvas texture) ===== */
+    function createDrawingPlaneMesh(widthMeters = 5, heightMeters = 5, texSize = 2048) {
       const c = document.createElement("canvas");
-      c.width = texSize;
-      c.height = texSize;
+      c.width = texSize; c.height = texSize;
       const ctx = c.getContext("2d");
       ctx.clearRect(0, 0, texSize, texSize);
 
@@ -131,64 +134,47 @@ if (window.__surfaceless_main_loaded) {
       tex.encoding = THREE.sRGBEncoding;
       tex.flipY = false;
 
-      // Plane geometry lying flat
       const geom = new THREE.PlaneGeometry(widthMeters, heightMeters);
-      const mat = new THREE.MeshBasicMaterial({ 
-        map: tex, 
-        transparent: true, 
-        side: THREE.DoubleSide,
-        depthWrite: false
-      });
-      
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false });
       const mesh = new THREE.Mesh(geom, mat);
-      
-      // CRITICAL: Rotate to lie flat on floor (XZ plane)
+
+      // Force it flat on the ground and do NOT parent to camera
       mesh.rotation.x = -Math.PI / 2;
-      
-      // Position at floor level
-      mesh.position.y = 0.001; // Slightly above floor to avoid z-fighting
-      
-      mesh.userData = { 
-        canvas: c, 
-        ctx, 
-        tex, 
-        w: texSize, 
-        h: texSize, 
-        widthMeters, 
+      mesh.position.y = 0.001; // slightly above floor to avoid z-fighting
+
+      mesh.userData = {
+        canvas: c,
+        ctx,
+        tex,
+        w: texSize,
+        h: texSize,
+        widthMeters,
         heightMeters,
         renderedStrokes: new Set()
       };
-      
+
       return mesh;
     }
 
-    /* ===== Grid helper on floor ===== */
-    function makeGridMesh(size = 5, divisions = 20) {
-      const g = new THREE.GridHelper(size, divisions, 0x00ffff, 0x004444);
-      g.material.opacity = 0.3;
-      g.material.transparent = true;
-      g.position.y = 0;
-      return g;
-    }
-
     /* ===== State ===== */
-    const planeObjects = new Map();
+    const planeObjects = new Map(); // id -> {mesh,meta,grid}
     let localPlacedPlaneId = null;
-    let lastStrokeId = null;
+    let localPlaneMesh = null;
+    let localGrid = null;
 
     let spraying = false;
     let samplingTimer = null;
     let strokeBuffer = [];
     let currentStrokeId = null;
     let lastSamplePoint = null;
+    let lastStrokeId = null;
     let flushTimeout = null;
 
-    /* ===== Device Orientation (CAMERA ONLY, NOT CANVAS) ===== */
+    /* ===== Device orientation (for camera aiming) ===== */
     const zee = new THREE.Vector3(0, 0, 1);
     const euler = new THREE.Euler();
     const q0 = new THREE.Quaternion();
     const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-
     function setObjectQuaternion(quaternion, alpha, beta, gamma, orient) {
       const degToRad = Math.PI / 180;
       const _x = beta ? beta * degToRad : 0;
@@ -199,128 +185,140 @@ if (window.__surfaceless_main_loaded) {
       quaternion.multiply(q1);
       quaternion.multiply(q0.setFromAxisAngle(zee, -orient));
     }
-
     let screenOrientation = window.orientation || 0;
-    window.addEventListener('orientationchange', () => {
-      screenOrientation = window.orientation || 0;
-    });
+    window.addEventListener('orientationchange', () => screenOrientation = window.orientation || 0);
 
+    let lastHeading = 0;
+    function startHeadingWatcher() {
+      function handler(e) { if (e.alpha != null) lastHeading = e.alpha; }
+      if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+        // requestPermission must be called from user gesture; we call it when enabling camera
+        window.addEventListener("deviceorientation", handler, true);
+      } else {
+        window.addEventListener("deviceorientation", handler, true);
+      }
+    }
     function handleDeviceOrientationEvent(ev) {
       if (!ev) return;
-      // ONLY update camera orientation, NOT canvas
-      setObjectQuaternion(
-        camera.quaternion, 
-        ev.alpha, 
-        ev.beta, 
-        ev.gamma, 
-        screenOrientation || 0
-      );
+      setObjectQuaternion(camera.quaternion, ev.alpha, ev.beta, ev.gamma, screenOrientation || 0);
     }
-
     function startOrientationWatcher() {
-      window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
+      if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+        // requestPermission previously attempted on enableCam click (user gesture)
+        window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
+      } else {
+        window.addEventListener('deviceorientation', handleDeviceOrientationEvent, true);
+      }
     }
 
-    /* ===== Ray cast from camera to floor (y=0) ===== */
+    /* ===== Raycast from camera center to floor y=0 ===== */
     function computeReticlePointOnFloor() {
       const origin = new THREE.Vector3();
       camera.getWorldPosition(origin);
-      
-      // Cast ray straight down from camera center
-      const dir = new THREE.Vector3(0, 0, -1)
-        .applyQuaternion(camera.quaternion)
-        .normalize();
-      
-      // Check if looking down enough
-      if (Math.abs(dir.y) < 0.1) return null; // Too horizontal
-      
-      // Intersect with floor plane (y=0)
-      const t = -origin.y / dir.y;
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+
+      // require some downward component (user must tilt a bit)
+      if (Math.abs(dir.y) < 0.01) return null;
+
+      const t = -origin.y / dir.y; // origin.y + t*dir.y = 0 => t = -origin.y/dir.y
       if (t <= 0) return null;
-      
       return origin.clone().add(dir.multiplyScalar(t));
     }
 
-    /* ===== Convert 3D world position to 2D canvas UV ===== */
+    /* ===== World <-> Plane UV mapping (single definition) ===== */
     function worldToPlaneUV(mesh, worldPos) {
-      // Convert world position to local mesh coordinates
-      const local = mesh.worldToLocal(worldPos.clone());
-      
-      // Since plane is rotated -90° around X, local coords are:
-      // local.x = world X (left-right)
-      // local.z = world Z (forward-back) -> this becomes V
-      // local.y = world Y (up-down, should be ~0 on floor)
-      
+      const local = worldPos.clone();
+      mesh.worldToLocal(local); // transform into mesh local space
       const halfW = mesh.userData.widthMeters / 2;
       const halfH = mesh.userData.heightMeters / 2;
-      
-      // Map local XZ to UV coordinates
       const u = (local.x + halfW) / mesh.userData.widthMeters;
       const v = (local.z + halfH) / mesh.userData.heightMeters;
-      
-      return { 
-        u: THREE.MathUtils.clamp(u, 0, 1), 
-        v: THREE.MathUtils.clamp(v, 0, 1)
-      };
+      // v flip so canvas top maps consistently (we use stored coords as-is in push)
+      return { u: THREE.MathUtils.clamp(u, 0, 1), v: THREE.MathUtils.clamp(1 - v, 0, 1) };
     }
 
-    /* ===== Paint on canvas texture ===== */
+    /* ===== Paint on plane canvas texture (small circle stamping) ===== */
     function paintCircleOnMesh(mesh, u, v, color, radiusPx) {
       if (!mesh || !mesh.userData || !mesh.userData.ctx) return;
-      
       const ctx = mesh.userData.ctx;
       const x = Math.round(u * mesh.userData.w);
-      const y = Math.round(v * mesh.userData.h);
-      
+      const y = Math.round((1 - v) * mesh.userData.h); // flip back for canvas coordinates
       ctx.beginPath();
       ctx.fillStyle = color;
       ctx.arc(x, y, radiusPx, 0, Math.PI * 2);
       ctx.fill();
-      
       mesh.userData.tex.needsUpdate = true;
     }
 
-    /* ===== Firebase helpers ===== */
+    /* ====== GPS helpers ====== */
+    function getCurrentPositionPromise() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("No geolocation"));
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
+      });
+    }
+    async function sampleAndAverageGPS(n = 6, delayMs = 300) {
+      const samples = [];
+      for (let i = 0; i < n; i++) {
+        try { const p = await getCurrentPositionPromise(); samples.push(p.coords); } catch (e) { /* ignore single failures */ }
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+      if (!samples.length) throw new Error("No GPS samples");
+      const avg = samples.reduce((acc, s) => { acc.lat += s.latitude; acc.lon += s.longitude; acc.alt += (s.altitude || 0); return acc; }, { lat: 0, lon: 0, alt: 0 });
+      avg.lat /= samples.length; avg.lon /= samples.length; avg.alt /= samples.length;
+      return avg;
+    }
+
+    // Convert lat/lon deltas to metres (east/north)
+    function latLonToMetersDelta(lat0, lon0, lat1, lon1) {
+      const R = 6378137;
+      const dLat = (lat1 - lat0) * Math.PI / 180;
+      const dLon = (lon1 - lon0) * Math.PI / 180;
+      const meanLat = (lat0 + lat1) / 2 * Math.PI / 180;
+      const north = dLat * R;
+      const east = dLon * R * Math.cos(meanLat);
+      return { east, north };
+    }
+
+    // Map east/north meters into local XZ using device heading (viewer)
+    function metersToLocalXZ(east, north, headingDeg) {
+      const theta = -headingDeg * Math.PI / 180; // rotate by negative heading so that device forward aligns
+      const x = east * Math.cos(theta) - north * Math.sin(theta);
+      const z = east * Math.sin(theta) + north * Math.cos(theta);
+      return { x, z: -z };
+    }
+
+    /* ===== Firebase stroke helpers ===== */
     async function createStrokeForPlane(planeId, color, width) {
       const strokesRef = ref(db, `planes/${planeId}/strokes`);
       const strokeRef = push(strokesRef);
-      await set(strokeRef, { 
-        color, 
-        width, 
-        ownerId: getUniqueUserId(),
-        createdAt: Date.now() 
-      });
+      await set(strokeRef, { color, width, ownerId: getUniqueUserId(), createdAt: Date.now() });
       lastStrokeId = strokeRef.key;
       return strokeRef.key;
     }
 
     async function pushPointsForStroke(planeId, strokeId, points) {
       if (!points || points.length === 0) return;
-      
       const pointsRef = ref(db, `planes/${planeId}/strokes/${strokeId}/points`);
       const updates = {};
-      
-      points.forEach(p => {
+      for (const p of points) {
         const key = push(pointsRef).key;
         updates[key] = { u: p.u, v: p.v, t: Date.now() };
-      });
-      
+      }
       await update(ref(db, `planes/${planeId}/strokes/${strokeId}/points`), updates);
     }
 
-    /* ===== Listen to strokes ===== */
+    /* ===== Listen for strokes for a plane and render incremental points ===== */
     function listenStrokesForPlane(planeId, mesh) {
       const strokesRef = ref(db, `planes/${planeId}/strokes`);
-      
       onChildAdded(strokesRef, (sSnap) => {
         const strokeId = sSnap.key;
         const meta = sSnap.val();
-        
+        // avoid re-rendering strokes twice
         if (mesh.userData.renderedStrokes.has(strokeId)) return;
         mesh.userData.renderedStrokes.add(strokeId);
-        
+
         const ptsRef = ref(db, `planes/${planeId}/strokes/${strokeId}/points`);
-        
         onChildAdded(ptsRef, (ptSnap) => {
           const pt = ptSnap.val();
           if (!pt) return;
@@ -329,7 +327,7 @@ if (window.__surfaceless_main_loaded) {
       });
     }
 
-    /* ===== Firebase plane listeners ===== */
+    /* ===== Listen for planes in DB and add to scene ===== */
     onChildAdded(planesRef, (snap) => {
       const id = snap.key;
       const meta = snap.val();
@@ -338,111 +336,137 @@ if (window.__surfaceless_main_loaded) {
 
       const mesh = createDrawingPlaneMesh(meta.widthMeters || 5, meta.heightMeters || 5);
       mesh.name = `plane-${id}`;
-      
-      // CRITICAL: Place at stored position on FLOOR (y=0)
-      if (meta.pos && typeof meta.pos.x === 'number') {
+
+      // Place using saved lat/lon if available (reproject to local XZ)
+      if (meta.lat != null && meta.lon != null) {
+        getCurrentPositionPromise().then(pos => {
+          try {
+            const myLat = pos.coords.latitude, myLon = pos.coords.longitude;
+            // east/north from viewer -> plane
+            const { east, north } = latLonToMetersDelta(myLat, myLon, meta.lat, meta.lon);
+            // convert to local x,z using viewer heading
+            const { x, z } = metersToLocalXZ(east, north, lastHeading || 0);
+            mesh.position.set(x, 0.001, z);
+          } catch (e) {
+            console.warn("Failed geo reprojection:", e);
+            mesh.position.set(0, 0.001, -2 - planeObjects.size * 0.5);
+          }
+          scene.add(mesh);
+          const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
+          grid.position.set(mesh.position.x, 0.001, mesh.position.z);
+          scene.add(grid);
+          planeObjects.set(id, { mesh, meta, grid });
+          listenStrokesForPlane(id, mesh);
+        }).catch(() => {
+          mesh.position.set(0, 0.001, -2 - planeObjects.size * 0.5);
+          scene.add(mesh);
+          const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
+          grid.position.set(mesh.position.x, 0.001, mesh.position.z);
+          scene.add(grid);
+          planeObjects.set(id, { mesh, meta, grid });
+          listenStrokesForPlane(id, mesh);
+        });
+      } else if (meta.pos && typeof meta.pos.x === 'number') {
         mesh.position.set(meta.pos.x, 0.001, meta.pos.z);
+        scene.add(mesh);
+        const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
+        grid.position.set(mesh.position.x, 0.001, mesh.position.z);
+        scene.add(grid);
+        planeObjects.set(id, { mesh, meta, grid });
+        listenStrokesForPlane(id, mesh);
       } else {
-        // Fallback position in front of user
-        mesh.position.set(0, 0.001, -2);
+        mesh.position.set(0, 0.001, -2 - planeObjects.size * 0.5);
+        scene.add(mesh);
+        const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
+        grid.position.set(mesh.position.x, 0.001, mesh.position.z);
+        scene.add(grid);
+        planeObjects.set(id, { mesh, meta, grid });
+        listenStrokesForPlane(id, mesh);
       }
-      
-      scene.add(mesh);
-      
-      const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
-      grid.position.set(mesh.position.x, 0, mesh.position.z);
-      scene.add(grid);
-      
-      planeObjects.set(id, { mesh, meta, grid });
-      listenStrokesForPlane(id, mesh);
-      
-      if (id === localPlacedPlaneId && undoBtn) {
-        undoBtn.style.display = '';
-      }
-      
-      console.log(`Plane ${id} added at`, mesh.position);
     });
 
     onChildRemoved(planesRef, (snap) => {
       const id = snap.key;
       const obj = planeObjects.get(id);
       if (!obj) return;
-      
-      obj.mesh.geometry.dispose();
-      obj.mesh.material.map.dispose();
-      obj.mesh.material.dispose();
-      scene.remove(obj.mesh);
-      
+      if (obj.mesh) {
+        obj.mesh.geometry.dispose();
+        if (obj.mesh.material.map) obj.mesh.material.map.dispose();
+        obj.mesh.material.dispose();
+        scene.remove(obj.mesh);
+      }
       if (obj.grid) {
         obj.grid.geometry.dispose();
         obj.grid.material.dispose();
         scene.remove(obj.grid);
       }
-      
       planeObjects.delete(id);
-      
       if (id === localPlacedPlaneId) {
         localPlacedPlaneId = null;
-        if (undoBtn) undoBtn.style.display = 'none';
+        localPlaneMesh = null;
       }
     });
 
-    /* ===== Network status ===== */
+    /* ===== Network status indicator (connected) ===== */
     const connectedRef = ref(db, '.info/connected');
     onValue(connectedRef, (snap) => {
       const connected = snap.val();
-      if (networkStatusEl) {
-        networkStatusEl.className = connected ? 'connected' : 'offline';
-      }
+      if (networkStatusEl) networkStatusEl.className = connected ? 'connected' : 'offline';
     });
 
-    /* ===== Create local plane ===== */
+    /* ===== Create local plane (push metadata including GPS + heading) ===== */
     async function createLocalPlaneAndPush() {
-      if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) {
-        return localPlacedPlaneId;
-      }
-      
+      if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) return localPlacedPlaneId;
       const rp = computeReticlePointOnFloor();
-      const pos = rp 
-        ? { x: rp.x, z: rp.z } 
-        : { x: 0, z: -2 };
-      
+      const pos = rp ? { x: rp.x, z: rp.z } : { x: 0, z: -2 };
+      const gpsMeta = {};
+      try {
+        const avg = await sampleAndAverageGPS(5, 250);
+        gpsMeta.lat = avg.lat; gpsMeta.lon = avg.lon; gpsMeta.alt = avg.alt;
+      } catch (e) { /* ignore GPS failure */ }
+
       const meta = {
         createdAt: Date.now(),
         ownerId: getUniqueUserId(),
         widthMeters: 5,
         heightMeters: 5,
-        pos
+        pos,
+        ...gpsMeta,
+        headingAtPlace: lastHeading || 0
       };
-      
       const newRef = push(planesRef);
       await set(newRef, meta);
       localPlacedPlaneId = newRef.key;
-      
-      console.log("Created canvas at", pos);
+
+      // instantiate local visuals
+      const mesh = createDrawingPlaneMesh(meta.widthMeters, meta.heightMeters);
+      mesh.position.set(pos.x, 0.001, pos.z);
+      scene.add(mesh);
+      localPlaneMesh = mesh;
+      const grid = makeGridMesh(mesh.userData.widthMeters, Math.round(mesh.userData.widthMeters * 4));
+      grid.position.set(mesh.position.x, 0.001, mesh.position.z);
+      scene.add(grid);
+      localGrid = grid;
+      planeObjects.set(localPlacedPlaneId, { mesh, meta, grid });
+      listenStrokesForPlane(localPlacedPlaneId, mesh);
+      console.log("Created local plane", localPlacedPlaneId, meta);
       return localPlacedPlaneId;
     }
 
-    /* ===== Draw on canvas (FIXED: 2D on floor) ===== */
+    /* ===== Sampling loop: sample reticle and paint while spraying ===== */
     function sampleAndPaint() {
       if (!localPlacedPlaneId) return;
-      
       const pt = computeReticlePointOnFloor();
       if (!pt) return;
-      
       const planeObj = planeObjects.get(localPlacedPlaneId);
       if (!planeObj) return;
-      
-      // Convert 3D floor point to 2D canvas UV
       const uv = worldToPlaneUV(planeObj.mesh, pt);
       const brushPx = parseInt(brushRange?.value || 12, 10) || 12;
       const color = colorPicker?.value || "#00ffd0";
-      
+
       if (lastSamplePoint) {
-        // Interpolate for smooth lines
         const dist = Math.hypot(lastSamplePoint.u - uv.u, lastSamplePoint.v - uv.v);
-        const steps = Math.max(1, Math.floor(dist * 300));
-        
+        const steps = Math.max(1, Math.floor(dist * 400));
         for (let i = 0; i <= steps; i++) {
           const t = i / Math.max(1, steps);
           const iu = THREE.MathUtils.lerp(lastSamplePoint.u, uv.u, t);
@@ -454,248 +478,174 @@ if (window.__surfaceless_main_loaded) {
         paintCircleOnMesh(planeObj.mesh, uv.u, uv.v, color, brushPx);
         strokeBuffer.push({ u: uv.u, v: uv.v });
       }
-      
+
       lastSamplePoint = uv;
-      
-      // Debounced flush
+
+      // Debounced flush of points (non-blocking)
       clearTimeout(flushTimeout);
       flushTimeout = setTimeout(() => {
         if (strokeBuffer.length > 0 && currentStrokeId) {
           const flush = strokeBuffer.splice(0, strokeBuffer.length);
-          pushPointsForStroke(localPlacedPlaneId, currentStrokeId, flush)
-            .catch(e => console.warn("Failed to push points:", e));
+          pushPointsForStroke(localPlacedPlaneId, currentStrokeId, flush).catch(e => console.warn("pushPoints failed", e));
         }
-      }, 100);
+      }, 120);
     }
 
     async function startSpraying() {
       if (spraying) return;
-      
-      if (!cameraEnabled) {
-        updateStatus("Enable camera first");
-        return;
-      }
-      
+      if (!cameraEnabled) { updateStatus("Enable camera first"); return; }
       if (!localPlacedPlaneId) {
         updateStatus("Placing canvas...");
         try {
           await createLocalPlaneAndPush();
-          updateStatus("Drawing...");
+          updateStatus("Canvas placed — hold to spray");
         } catch (e) {
           console.error("Failed to create plane:", e);
-          updateStatus("Failed to create canvas");
+          updateStatus("Failed to place canvas");
           return;
         }
       }
-      
       spraying = true;
       lastSamplePoint = null;
       strokeBuffer = [];
-      
       const color = colorPicker?.value || "#00ffd0";
       const width = parseInt(brushRange?.value || 12, 10) || 12;
-      
       try {
         currentStrokeId = await createStrokeForPlane(localPlacedPlaneId, color, width);
         samplingTimer = setInterval(sampleAndPaint, 50);
-        updateStatus("Drawing...");
+        updateStatus("Spraying...");
       } catch (e) {
-        console.error("Failed to start stroke:", e);
+        console.error("start stroke failed:", e);
         spraying = false;
-        updateStatus("Failed to start drawing");
+        updateStatus("Failed to start stroke");
       }
     }
 
     async function stopSpraying() {
       if (!spraying) return;
-      
       spraying = false;
-      
-      if (samplingTimer) {
-        clearInterval(samplingTimer);
-        samplingTimer = null;
-      }
-      
+      if (samplingTimer) { clearInterval(samplingTimer); samplingTimer = null; }
       clearTimeout(flushTimeout);
-      
-      // Final flush
       if (strokeBuffer.length > 0 && currentStrokeId) {
         const buf = strokeBuffer.splice(0, strokeBuffer.length);
-        await pushPointsForStroke(localPlacedPlaneId, currentStrokeId, buf)
-          .catch(e => console.warn("Failed to flush stroke:", e));
+        await pushPointsForStroke(localPlacedPlaneId, currentStrokeId, buf).catch(e => console.warn("final push failed", e));
       }
-      
       currentStrokeId = null;
       lastSamplePoint = null;
-      
       updateStatus("Ready to draw");
     }
 
-    /* ===== Undo last stroke ===== */
+    /* ===== Undo last stroke (local) ===== */
     async function undoLastStroke() {
-      if (!lastStrokeId || !localPlacedPlaneId) {
-        updateStatus("Nothing to undo");
-        return;
-      }
-      
+      if (!lastStrokeId || !localPlacedPlaneId) { updateStatus("Nothing to undo"); return; }
       try {
-        const strokeRef = ref(db, `planes/${localPlacedPlaneId}/strokes/${lastStrokeId}`);
-        await remove(strokeRef);
-        
-        // Clear and redraw canvas
+        await remove(ref(db, `planes/${localPlacedPlaneId}/strokes/${lastStrokeId}`));
+        // Clear local canvas and re-render strokes from DB (coarse approach)
         const planeObj = planeObjects.get(localPlacedPlaneId);
-        if (planeObj && planeObj.mesh.userData.ctx) {
+        if (planeObj && planeObj.mesh && planeObj.mesh.userData && planeObj.mesh.userData.ctx) {
           const ctx = planeObj.mesh.userData.ctx;
           ctx.clearRect(0, 0, planeObj.mesh.userData.w, planeObj.mesh.userData.h);
           planeObj.mesh.userData.tex.needsUpdate = true;
           planeObj.mesh.userData.renderedStrokes.clear();
         }
-        
         lastStrokeId = null;
         updateStatus("Undone");
       } catch (e) {
-        console.warn("Failed to undo:", e);
+        console.warn("Undo failed", e);
         updateStatus("Undo failed");
       }
     }
 
-    /* ===== Camera functions ===== */
+    /* ===== Camera helpers (getUserMedia & iOS orientation permission) ===== */
     async function getCameras() {
       try {
-        const devs = await navigator.mediaDevices.enumerateDevices();
-        return devs.filter(d => d.kind === 'videoinput');
-      } catch (e) {
-        console.warn("Failed to enumerate devices:", e);
-        return [];
-      }
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        return devices.filter(d => d.kind === 'videoinput');
+      } catch (e) { console.warn("enumerateDevices failed", e); return []; }
     }
 
     async function startCamera(deviceId = null) {
       try {
-        if (camStream) {
-          camStream.getTracks().forEach(t => t.stop());
-          camStream = null;
-        }
-        
-        const constraints = deviceId 
-          ? { video: { deviceId: { exact: deviceId }, facingMode: { ideal: "environment" } }, audio: false }
-          : { video: { facingMode: { ideal: "environment" } }, audio: false };
-        
-        console.log("Requesting camera with constraints:", constraints);
+        if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+        const constraints = deviceId ? { video: { deviceId: { exact: deviceId }, facingMode: { ideal: "environment" } }, audio: false } : { video: { facingMode: { ideal: "environment" } }, audio: false };
         camStream = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log("Camera stream obtained");
-        
         if (!camVideo) {
-          camVideo = document.createElement('video');
-          camVideo.id = "camVideo";
-          camVideo.autoplay = true;
-          camVideo.playsInline = true;
-          camVideo.muted = true;
-          camVideo.style.position = 'absolute';
-          camVideo.style.inset = '0';
-          camVideo.style.width = '100%';
-          camVideo.style.height = '100%';
-          camVideo.style.objectFit = 'cover';
-          camVideo.style.zIndex = '0';
-          document.getElementById("ar-container")?.appendChild(camVideo);
+          camVideo = document.getElementById("camera-feed") || null;
         }
-        
+        camVideo = document.getElementById("camera-feed");
         camVideo.srcObject = camStream;
-        
-        await camVideo.play();
-        console.log("Camera playing");
-        
+        try { await camVideo.play(); } catch (e) { console.warn("video play blocked", e); }
         cameraEnabled = true;
-        updateStatus("Camera ready — tap Place Canvas");
-        
+        updateStatus("Camera ready — Place Canvas");
       } catch (err) {
         console.error("Camera start failed:", err);
         throw err;
       }
     }
 
-    /* ===== Enable Camera button ===== */
+    /* ===== Enable camera button behavior (user gesture required on iOS) ===== */
     if (enableCameraBtn) {
       enableCameraBtn.addEventListener("click", async () => {
-        console.log("Enable camera button clicked");
         enableCameraBtn.disabled = true;
-        updateStatus("Requesting permissions...");
-        
+        updateStatus("Requesting camera & motion permission...");
         try {
-          // Request device orientation permission on iOS
-          if (typeof DeviceMotionEvent !== "undefined" && 
-              typeof DeviceMotionEvent.requestPermission === "function") {
-            try {
-              const p = await DeviceMotionEvent.requestPermission();
-              console.log("Device motion permission:", p);
-            } catch (e) {
-              console.warn("Device motion permission error:", e);
-            }
-          }
-          
-          if (typeof DeviceOrientationEvent !== "undefined" && 
-              typeof DeviceOrientationEvent.requestPermission === "function") {
+          // On modern iOS, DeviceOrientationEvent.requestPermission needs user gesture:
+          if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
             try {
               const p = await DeviceOrientationEvent.requestPermission();
-              console.log("Device orientation permission:", p);
-            } catch (e) {
-              console.warn("Device orientation permission error:", e);
-            }
+              console.log("DeviceOrientation permission:", p);
+            } catch (e) { console.warn("DeviceOrientation request failed", e); }
           }
-          
+          // Start camera and orientation watchers
           await startCamera(null);
-          
+          startHeadingWatcher();
+          startOrientationWatcher();
+
+          // populate camera select if multiple
           const cams = await getCameras();
           if (cameraSelect && cams.length > 1) {
             cameraSelect.style.display = "";
             cameraSelect.innerHTML = "";
-            
-            cams.forEach((c, idx) => {
-              const opt = document.createElement("option");
-              opt.value = c.deviceId;
-              opt.text = c.label || ("Camera " + (idx + 1));
-              cameraSelect.appendChild(opt);
-            });
-            
+            cams.forEach((c, i) => { const opt = document.createElement("option"); opt.value = c.deviceId; opt.text = c.label || ("Camera " + (i + 1)); cameraSelect.appendChild(opt); });
             cameraSelect.addEventListener("change", async () => {
-              try {
-                await startCamera(cameraSelect.value);
-                updateStatus("Camera switched");
-              } catch (e) {
-                console.warn("Failed to switch camera:", e);
-                updateStatus("Camera switch failed");
-              }
+              try { await startCamera(cameraSelect.value); updateStatus("Camera switched"); } catch (e) { console.warn("Camera switch failed", e); updateStatus("Camera switch failed"); }
             });
           }
-          
-          startOrientationWatcher();
-          
-        } catch (err) {
-          console.error("Camera/motion permission failed:", err);
+
+          updateStatus("Camera & motion enabled — Place Canvas");
+        } catch (e) {
+          console.error("Enable camera failed", e);
           enableCameraBtn.disabled = false;
-          updateStatus("Camera permission denied — tap to retry");
+          updateStatus("Camera permission required");
           alert("Camera permission is required. Please allow camera access and try again.");
         }
       });
+    } else {
+      // attempt implicit camera start (may be blocked)
+      (async () => {
+        try {
+          await startCamera(null);
+          startHeadingWatcher();
+          startOrientationWatcher();
+          updateStatus("Camera ready — Place Canvas");
+        } catch (e) {
+          console.warn("Implicit camera start failed", e);
+        }
+      })();
     }
 
     /* ===== Place Canvas button ===== */
     if (placeCanvasBtn) {
       placeCanvasBtn.addEventListener("click", async () => {
-        if (!cameraEnabled) {
-          updateStatus("Enable camera first");
-          return;
-        }
-        
+        if (!cameraEnabled) { updateStatus("Enable camera first"); return; }
         placeCanvasBtn.disabled = true;
-        updateStatus("Placing canvas...");
-        
+        updateStatus("Placing canvas (sampling GPS)...");
         try {
           await createLocalPlaneAndPush();
           updateStatus("Canvas placed! Hold screen to draw");
         } catch (e) {
-          console.error("Failed to place canvas:", e);
-          updateStatus("Failed to place canvas");
+          console.warn("createLocalPlane failed", e);
+          updateStatus("Placed without geo");
         } finally {
           placeCanvasBtn.disabled = false;
         }
@@ -705,37 +655,28 @@ if (window.__surfaceless_main_loaded) {
     /* ===== Clear button ===== */
     if (clearBtn) {
       clearBtn.addEventListener("click", async () => {
-        if (!confirm("Clear all canvases? This cannot be undone.")) return;
-        
+        if (!confirm("Clear all canvases? This will remove all drawings.")) return;
         clearBtn.disabled = true;
-        updateStatus("Clearing...");
-        
+        updateStatus("Clearing all...");
         try {
           await set(ref(db, "planes"), null);
-          
           planeObjects.forEach(p => {
-            p.mesh.geometry.dispose();
-            p.mesh.material.map.dispose();
-            p.mesh.material.dispose();
-            scene.remove(p.mesh);
-            
-            if (p.grid) {
-              p.grid.geometry.dispose();
-              p.grid.material.dispose();
-              scene.remove(p.grid);
+            if (p.mesh) {
+              p.mesh.geometry.dispose();
+              if (p.mesh.material.map) p.mesh.material.map.dispose();
+              p.mesh.material.dispose();
+              scene.remove(p.mesh);
             }
+            if (p.grid) { p.grid.geometry.dispose(); p.grid.material.dispose(); scene.remove(p.grid); }
           });
-          
           planeObjects.clear();
           localPlacedPlaneId = null;
+          localPlaneMesh = null;
           lastStrokeId = null;
-          
           if (undoBtn) undoBtn.style.display = 'none';
-          
-          updateStatus("All cleared");
-          
+          updateStatus("Cleared all");
         } catch (e) {
-          console.warn("Clear failed:", e);
+          console.warn("Clear failed", e);
           updateStatus("Clear failed");
         } finally {
           clearBtn.disabled = false;
@@ -745,81 +686,46 @@ if (window.__surfaceless_main_loaded) {
 
     /* ===== Undo button ===== */
     if (undoBtn) {
-      undoBtn.addEventListener("click", () => {
-        undoLastStroke();
-      });
+      undoBtn.addEventListener("click", () => undoLastStroke());
     }
 
-    /* ===== Input handlers ===== */
-    function onPointerDown(e) {
-      e.preventDefault();
-      startSpraying().catch(err => console.warn("Start spray failed:", err));
-    }
-    
-    function onPointerUp(e) {
-      e.preventDefault();
-      stopSpraying().catch(err => console.warn("Stop spray failed:", err));
-    }
+    /* ===== Input handlers (press & hold + volume + keyboard) ===== */
+    function onPointerDown(e) { e.preventDefault(); startSpraying().catch(err => console.warn(err)); }
+    function onPointerUp(e) { e.preventDefault(); stopSpraying().catch(err => console.warn(err)); }
 
     canvasEl.addEventListener("pointerdown", onPointerDown);
     canvasEl.addEventListener("pointerup", onPointerUp);
     canvasEl.addEventListener("pointercancel", onPointerUp);
     canvasEl.addEventListener("pointerleave", onPointerUp);
 
-    // Keyboard fallback
+    // keyboard + volume keys (best-effort)
     window.addEventListener("keydown", (ev) => {
-      if (ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") {
-        if (!spraying && cameraEnabled) {
-          ev.preventDefault();
-          startSpraying().catch(() => {});
-        }
-      }
+      if ((ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") && !spraying && cameraEnabled) { ev.preventDefault(); startSpraying().catch(()=>{}); }
+      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") { if (!spraying && cameraEnabled) { ev.preventDefault(); startSpraying().catch(()=>{}); } }
     });
-    
     window.addEventListener("keyup", (ev) => {
-      if (ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") {
-        if (spraying) {
-          ev.preventDefault();
-          stopSpraying().catch(() => {});
-        }
-      }
+      if ((ev.code === "Space" || ev.code === "ArrowUp" || ev.code === "ArrowDown") && spraying) { ev.preventDefault(); stopSpraying().catch(()=>{}); }
+      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") { if (spraying) { ev.preventDefault(); stopSpraying().catch(()=>{}); } }
     });
 
-    // Volume keys
-    window.addEventListener("keydown", (ev) => {
-      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") {
-        if (!spraying && cameraEnabled) {
-          ev.preventDefault();
-          startSpraying().catch(() => {});
-        }
-      }
-    });
-    
-    window.addEventListener("keyup", (ev) => {
-      if (ev.key === "AudioVolumeDown" || ev.key === "AudioVolumeUp") {
-        if (spraying) {
-          ev.preventDefault();
-          stopSpraying().catch(() => {});
-        }
-      }
-    });
-
-    /* ===== Render loop ===== */
+    /* ===== Render loop: update reticle + draw ===== */
     function renderLoop() {
       requestAnimationFrame(renderLoop);
-      
       const aim = computeReticlePointOnFloor();
-      
       if (aim) {
-        reticle.visible = true;
-        reticle.position.copy(aim);
+        reticle.visible = true; reticle.position.copy(aim);
+        crosshair.visible = true; crosshair.position.copy(aim);
       } else {
         reticle.visible = false;
+        if (localPlacedPlaneId && planeObjects.has(localPlacedPlaneId)) {
+          const obj = planeObjects.get(localPlacedPlaneId);
+          crosshair.visible = true; crosshair.position.copy(obj.mesh.position);
+        } else {
+          crosshair.visible = false;
+        }
       }
-      
       renderer.render(scene, camera);
     }
-    
     renderLoop();
 
     /* ===== Window resize ===== */
@@ -829,16 +735,11 @@ if (window.__surfaceless_main_loaded) {
       camera.updateProjectionMatrix();
     });
 
-    /* ===== Visibility change handler ===== */
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden && spraying) {
-        stopSpraying().catch(() => {});
-      }
-    });
+    /* ===== Visibility change: stop spraying when hidden ===== */
+    document.addEventListener("visibilitychange", () => { if (document.hidden && spraying) stopSpraying().catch(()=>{}); });
 
-    // Final ready state
+    /* ===== Init status ===== */
     updateStatus("Tap Enable Cam to start");
-    console.log("AR Graffiti app loaded successfully");
-    
+    console.log("AR Graffiti app loaded (full).");
   }); // DOMContentLoaded
-} // double-run guard
+} // guard
