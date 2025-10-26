@@ -1,6 +1,28 @@
-html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,Arial, sans-serif; -webkit-user-select:none; user-select:none}
-#ui{position:fixed;top:10px;left:10px;z-index:40;display:flex;gap:8px;align-items:center;background:rgba(0,0,0,0.22);padding:8px;border-radius:10px}
-#ui button,#ui select,#ui input[type="color"],#ui input[type="range"]{background:rgba(255,255,255,0.06);color:#fff;border:none;border-radius:6px;padding:6px 8px}
-#status{min-width:160px;font-size:13px;opacity:0.95;margin-left:6px}
-video#camVideo{position:fixed;left:0;top:0;width:100%;height:100%;object-fit:cover;z-index:0;background:#000}
-canvas#three-canvas{position:fixed;left:0;top:0;width:100%;height:100%;z-index:1}
+html,body{
+  margin:0;
+  height:100%;
+  background:#000;
+  color:#fff;
+  font-family:Inter, Arial, sans-serif;
+  -webkit-user-select:none;
+  user-select:none;
+}
+#ui {
+  position:fixed;
+  left:12px;
+  top:12px;
+  z-index:10;
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+#ui button {
+  padding:8px 12px;
+  border-radius:8px;
+  border: none;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  cursor:pointer;
+}
+#status { font-size:13px; opacity:0.9; padding-left:6px }
+canvas#three-canvas { width:100%; height:100%; display:block }
