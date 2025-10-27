@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#000000" />
-  <title>GPS AR Stickers</title>
+  <title>Street Stickers AR</title>
   
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -20,7 +20,7 @@
       width: 100%;
       overflow: hidden;
       background: #000;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: 'Impact', 'Arial Black', sans-serif;
       color: #fff;
     }
 
@@ -33,15 +33,96 @@
       align-items: center;
       justify-content: center;
       padding: 20px;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     }
     
     .page.active {
       display: flex;
     }
 
+    /* ===== HOME PAGE - SPRAY CAN DESIGN ===== */
+    #homePage {
+      background: #000;
+      justify-content: flex-start;
+      padding-top: 40px;
+    }
+
+    .logo-container {
+      width: 90%;
+      max-width: 350px;
+      margin-bottom: 30px;
+    }
+
+    .logo-container img {
+      width: 100%;
+      height: auto;
+      filter: drop-shadow(0 0 20px rgba(255, 255, 0, 0.4));
+    }
+
+    .spray-can-container {
+      position: relative;
+      width: 280px;
+      height: 500px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .spray-can-image {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      z-index: 1;
+      filter: drop-shadow(0 10px 30px rgba(0, 0, 0, 0.7));
+    }
+
+    .home-buttons {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      align-items: center;
+      margin-top: -20px;
+    }
+
+    .home-btn {
+      background: linear-gradient(135deg, #FFEB3B 0%, #76FF03 100%);
+      color: #000;
+      border: none;
+      padding: 15px 35px;
+      font-size: 18px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(255, 235, 59, 0.4);
+      transform: rotate(-2deg);
+      transition: all 0.2s;
+      position: relative;
+    }
+
+    .home-btn:nth-child(2) {
+      transform: rotate(1deg);
+    }
+
+    .home-btn:nth-child(3) {
+      transform: rotate(-1.5deg);
+    }
+
+    .home-btn:hover {
+      transform: scale(1.05) rotate(0deg);
+      box-shadow: 0 6px 25px rgba(118, 255, 3, 0.6);
+    }
+
+    .home-btn:active {
+      transform: scale(0.95);
+    }
+
     /* ===== DRAW PAGE ===== */
     #drawPage {
+      background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
       justify-content: flex-start;
       padding-top: 60px;
     }
@@ -53,9 +134,10 @@
       max-height: 400px;
       background: #fff;
       border-radius: 20px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 10px 40px rgba(255, 235, 59, 0.3);
       touch-action: none;
       cursor: crosshair;
+      border: 4px solid #FFEB3B;
     }
 
     .draw-controls {
@@ -64,20 +146,23 @@
       align-items: center;
       margin: 20px 0;
       padding: 15px 20px;
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(255, 235, 59, 0.1);
       border-radius: 15px;
       backdrop-filter: blur(10px);
+      border: 2px solid rgba(118, 255, 3, 0.3);
     }
 
     .draw-controls label {
       font-size: 14px;
-      color: rgba(255, 255, 255, 0.8);
+      color: #FFEB3B;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
     input[type="color"] {
       width: 50px;
       height: 50px;
-      border: 3px solid rgba(255, 255, 255, 0.3);
+      border: 3px solid #76FF03;
       border-radius: 10px;
       cursor: pointer;
       background: transparent;
@@ -85,6 +170,24 @@
 
     input[type="range"] {
       width: 120px;
+      -webkit-appearance: none;
+      background: transparent;
+    }
+
+    input[type="range"]::-webkit-slider-track {
+      background: rgba(118, 255, 3, 0.3);
+      height: 6px;
+      border-radius: 3px;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      background: #76FF03;
+      border-radius: 50%;
+      cursor: pointer;
+      margin-top: -7px;
     }
 
     .btn-group {
@@ -98,36 +201,38 @@
       border: none;
       border-radius: 12px;
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 900;
       cursor: pointer;
       transition: all 0.2s;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 1.5px;
+      font-family: 'Impact', sans-serif;
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: #fff;
-      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      background: linear-gradient(135deg, #FFEB3B 0%, #76FF03 100%);
+      color: #000;
+      box-shadow: 0 4px 15px rgba(255, 235, 59, 0.4);
     }
 
     .btn-primary:hover {
       transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+      box-shadow: 0 6px 20px rgba(118, 255, 3, 0.6);
     }
 
     .btn-secondary {
       background: rgba(255, 255, 255, 0.1);
-      color: #fff;
-      border: 2px solid rgba(255, 255, 255, 0.3);
+      color: #FFEB3B;
+      border: 2px solid rgba(255, 235, 59, 0.5);
     }
 
     .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 235, 59, 0.2);
+      border-color: #76FF03;
     }
 
     .btn-danger {
-      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      background: linear-gradient(135deg, #ff5252 0%, #c62828 100%);
       color: #fff;
     }
 
@@ -168,9 +273,10 @@
       display: flex;
       gap: 12px;
       padding: 15px 20px;
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.85);
       border-radius: 20px;
       backdrop-filter: blur(15px);
+      border: 2px solid rgba(255, 235, 59, 0.3);
     }
 
     .ar-status {
@@ -180,12 +286,17 @@
       transform: translateX(-50%);
       z-index: 10;
       padding: 12px 20px;
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.85);
       border-radius: 12px;
       backdrop-filter: blur(15px);
       font-size: 14px;
       max-width: 90vw;
       text-align: center;
+      color: #FFEB3B;
+      border: 2px solid rgba(118, 255, 3, 0.3);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 900;
     }
 
     .sticker-info {
@@ -194,45 +305,21 @@
       right: 20px;
       z-index: 10;
       padding: 10px 15px;
-      background: rgba(0, 0, 0, 0.6);
+      background: rgba(0, 0, 0, 0.85);
       border-radius: 10px;
       backdrop-filter: blur(10px);
       font-size: 12px;
       max-width: 150px;
+      border: 2px solid rgba(118, 255, 3, 0.3);
+      color: #FFEB3B;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
     .sticker-count {
-      color: #00ffd0;
-      font-weight: 700;
-      font-size: 20px;
-    }
-
-    /* ===== HOME PAGE ===== */
-    #homePage h1 {
-      font-size: 42px;
-      font-weight: 800;
-      margin-bottom: 10px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
-    #homePage p {
-      font-size: 16px;
-      color: rgba(255, 255, 255, 0.7);
-      margin-bottom: 40px;
-      max-width: 300px;
-      text-align: center;
-      line-height: 1.6;
-    }
-
-    .home-buttons {
-      display: flex;
-      flex-direction: column;
-      gap: 15px;
-      width: 100%;
-      max-width: 280px;
+      color: #76FF03;
+      font-weight: 900;
+      font-size: 24px;
     }
 
     /* ===== RETICLE ===== */
@@ -243,11 +330,11 @@
       transform: translate(-50%, -50%);
       width: 40px;
       height: 40px;
-      border: 3px solid #00ffd0;
+      border: 3px solid #76FF03;
       border-radius: 50%;
       z-index: 5;
       pointer-events: none;
-      box-shadow: 0 0 20px rgba(0, 255, 208, 0.6);
+      box-shadow: 0 0 20px rgba(118, 255, 3, 0.6);
     }
 
     .reticle::before {
@@ -258,53 +345,111 @@
       transform: translate(-50%, -50%);
       width: 8px;
       height: 8px;
-      background: #00ffd0;
+      background: #FFEB3B;
       border-radius: 50%;
     }
 
-    /* ===== MAP PAGE ===== */
+    /* ===== MAP PAGE - CANVAS STYLE ===== */
     #mapPage {
       padding: 0;
+      background: #000;
     }
 
     #map {
       width: 100%;
       height: 100%;
+      z-index: 1;
+      filter: grayscale(1) contrast(150%) brightness(110%);
     }
 
-    /* Loading indicator */
-    .loading {
-      display: inline-block;
-      width: 20px;
-      height: 20px;
-      border: 3px solid rgba(255, 255, 255, 0.3);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+    .map-overlay {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 20px) + 20px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+      padding: 12px 20px;
+      background: rgba(0, 0, 0, 0.9);
+      border-radius: 12px;
+      backdrop-filter: blur(15px);
+      font-size: 18px;
+      color: #FFEB3B;
+      border: 2px solid #76FF03;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      font-weight: 900;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    .map-ui {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+      display: flex;
+      gap: 12px;
+      padding: 15px 20px;
+      background: rgba(0, 0, 0, 0.9);
+      border-radius: 20px;
+      backdrop-filter: blur(15px);
+      border: 2px solid rgba(255, 235, 59, 0.3);
+    }
+
+    /* Hide Leaflet attribution */
+    .leaflet-control-attribution {
+      display: none !important;
+    }
+
+    /* Custom map tile styling - Canvas look */
+    .leaflet-tile-pane {
+      filter: grayscale(1) contrast(200%) brightness(120%) invert(1);
+    }
+
+    /* Custom sticker markers on map */
+    .sticker-marker-custom {
+      width: 50px !important;
+      height: 50px !important;
+      border: none !important;
+      background: none !important;
+    }
+
+    .sticker-marker-custom img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.5));
+    }
+
+    /* User marker styling */
+    .user-marker-custom {
+      font-size: 35px;
+      filter: drop-shadow(0 0 8px rgba(118, 255, 3, 0.8));
     }
   </style>
 </head>
 <body>
-  <!-- HOME PAGE -->
+  <!-- HOME PAGE - SPRAY CAN DESIGN -->
   <div id="homePage" class="page active">
-    <h1>AR Stickers</h1>
-    <p>Create stickers and place them anywhere in the world. Discover others' art!</p>
-    <div class="home-buttons">
-      <button id="createStickerBtn" class="btn btn-primary">Create Sticker</button>
-      <button id="exploreBtn" class="btn btn-secondary">Explore Stickers</button>
-      <button id="mapBtn" class="btn btn-secondary">View Map</button>
+    <div class="logo-container">
+      <img src="./images/logo.png" alt="Logo" />
+    </div>
+    
+    <div class="spray-can-container">
+      <img src="./images/can.png" alt="Spray Can" class="spray-can-image" />
+      
+      <div class="home-buttons">
+        <button id="createStickerBtn" class="home-btn">Create</button>
+        <button id="exploreBtn" class="home-btn">Explore</button>
+        <button id="mapBtn" class="home-btn">Map</button>
+      </div>
     </div>
   </div>
 
-  <!-- MAP PAGE -->
+  <!-- MAP PAGE - CANVAS STYLE -->
   <div id="mapPage" class="page">
     <div id="map"></div>
-    <div class="ar-status" style="top: 20px;">Sticker Map</div>
-    <div class="ar-ui">
+    <div class="map-overlay">Sticker Canvas</div>
+    <div class="map-ui">
       <button id="backFromMapBtn" class="btn btn-secondary">Back</button>
     </div>
   </div>
@@ -341,13 +486,13 @@
     <div class="ar-status" id="arStatus">Initializing AR...</div>
     
     <div class="sticker-info">
-      <div>Nearby Stickers:</div>
+      <div>Nearby:</div>
       <div class="sticker-count" id="stickerCount">0</div>
     </div>
     
     <div class="ar-ui">
       <button id="placeStickerBtn" class="btn btn-primary" style="display:none;">Place Here</button>
-      <button id="exitArBtn" class="btn btn-danger">Exit AR</button>
+      <button id="exitArBtn" class="btn btn-danger">Exit</button>
     </div>
   </div>
 
