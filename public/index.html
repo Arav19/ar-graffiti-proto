@@ -1,384 +1,370 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AR Sticker Explorer</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-        }
-        
-        body {
-            background-color: #000;
-            color: white;
-            overflow: hidden;
-            width: 100vw;
-            height: 100vh;
-        }
-        
-        #ar-container {
-            position: relative;
-            width: 100%;
-            height: 100%;
-        }
-        
-        #camera-feed {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            z-index: 1;
-        }
-        
-        #sticker-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 2;
-            pointer-events: none;
-        }
-        
-        .sticker {
-            position: absolute;
-            width: 80px;
-            height: 80px;
-            background-size: contain;
-            background-repeat: no-repeat;
-            background-position: center;
-            pointer-events: auto;
-            transition: transform 0.1s;
-        }
-        
-        #ui-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 3;
-            pointer-events: none;
-        }
-        
-        .info-panel {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background-color: rgba(0, 0, 0, 0.7);
-            padding: 12px 16px;
-            border-radius: 20px;
-            pointer-events: auto;
-        }
-        
-        .sticker-count {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-        
-        .sticker-label {
-            font-size: 14px;
-            opacity: 0.8;
-        }
-        
-        #exit-button {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 24px;
-            font-size: 16px;
-            font-weight: 600;
-            pointer-events: auto;
-            backdrop-filter: blur(10px);
-        }
-        
-        #loading {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #000;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            z-index: 10;
-        }
-        
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 4px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            border-top-color: white;
-            animation: spin 1s ease-in-out infinite;
-            margin-bottom: 20px;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        #permission-error {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.9);
-            display: none;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            z-index: 10;
-            text-align: center;
-            padding: 20px;
-        }
-        
-        .error-icon {
-            font-size: 48px;
-            margin-bottom: 20px;
-        }
-        
-        .error-text {
-            font-size: 18px;
-            margin-bottom: 30px;
-            max-width: 300px;
-        }
-        
-        #retry-button {
-            background-color: #007AFF;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 24px;
-            font-size: 16px;
-            font-weight: 600;
-        }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
+  <title>GPS AR Stickers</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #fff;
+    }
+
+    /* ===== PAGES ===== */
+    .page {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    }
+    
+    .page.active {
+      display: flex;
+    }
+
+    /* ===== DRAW PAGE ===== */
+    #drawPage {
+      justify-content: flex-start;
+      padding-top: 60px;
+    }
+
+    #drawCanvas {
+      width: 90vw;
+      max-width: 400px;
+      height: 90vw;
+      max-height: 400px;
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    .draw-controls {
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      margin: 20px 0;
+      padding: 15px 20px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      backdrop-filter: blur(10px);
+    }
+
+    .draw-controls label {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    input[type="color"] {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 10px;
+      cursor: pointer;
+      background: transparent;
+    }
+
+    input[type="range"] {
+      width: 120px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .btn {
+      padding: 14px 28px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      color: #fff;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    /* ===== AR PAGE ===== */
+    #arPage {
+      padding: 0;
+      background: transparent;
+      position: relative;
+    }
+
+    #arPage video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1; /* Camera feed in background */
+    }
+
+    #arPage canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2; /* Stickers on top of camera */
+      pointer-events: none; /* Allow clicks to pass through to video */
+    }
+
+    .ar-ui {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10; /* UI on top of everything */
+      display: flex;
+      gap: 12px;
+      padding: 15px 20px;
+      background: rgba(0, 0, 0, 0.7);
+      border-radius: 20px;
+      backdrop-filter: blur(15px);
+    }
+
+    .ar-status {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 20px) + 20px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10; /* UI on top of everything */
+      padding: 12px 20px;
+      background: rgba(0, 0, 0, 0.7);
+      border-radius: 12px;
+      backdrop-filter: blur(15px);
+      font-size: 14px;
+      max-width: 90vw;
+      text-align: center;
+    }
+
+    .sticker-info {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 20px) + 70px);
+      right: 20px;
+      z-index: 10; /* UI on top of everything */
+      padding: 10px 15px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 10px;
+      backdrop-filter: blur(10px);
+      font-size: 12px;
+      max-width: 150px;
+    }
+
+    .sticker-count {
+      color: #00ffd0;
+      font-weight: 700;
+      font-size: 20px;
+    }
+
+    /* ===== HOME PAGE ===== */
+    #homePage h1 {
+      font-size: 42px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    #homePage p {
+      font-size: 16px;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 40px;
+      max-width: 300px;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .home-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      width: 100%;
+      max-width: 280px;
+    }
+
+    /* ===== RETICLE ===== */
+    .reticle {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px;
+      height: 40px;
+      border: 3px solid #00ffd0;
+      border-radius: 50%;
+      z-index: 5;
+      pointer-events: none;
+      box-shadow: 0 0 20px rgba(0, 255, 208, 0.6);
+    }
+
+    .reticle::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px;
+      height: 8px;
+      background: #00ffd0;
+      border-radius: 50%;
+    }
+
+    /* ===== MAP PAGE ===== */
+    #mapPage {
+      padding: 0;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Loading indicator */
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
 </head>
 <body>
-    <div id="ar-container">
-        <!-- Camera feed will be inserted here -->
-        <div id="sticker-layer"></div>
-        
-        <div id="ui-overlay">
-            <div class="info-panel">
-                <div class="sticker-count">18 stickers nearby!</div>
-                <div class="sticker-label">Look around</div>
-            </div>
-            <button id="exit-button">EXIT AR</button>
-        </div>
-        
-        <div id="loading">
-            <div class="spinner"></div>
-            <div>Initializing AR Experience...</div>
-        </div>
-        
-        <div id="permission-error">
-            <div class="error-icon">📷</div>
-            <div class="error-text">Camera access is required for AR stickers. Please allow camera permissions and try again.</div>
-            <button id="retry-button">Retry</button>
-        </div>
+  <!-- HOME PAGE -->
+  <div id="homePage" class="page active">
+    <h1>AR Stickers</h1>
+    <p>Create stickers and place them anywhere in the world. Discover others' art!</p>
+    <div class="home-buttons">
+      <button id="createStickerBtn" class="btn btn-primary">Create Sticker</button>
+      <button id="exploreBtn" class="btn btn-secondary">Explore Stickers</button>
+      <button id="mapBtn" class="btn btn-secondary">View Map</button>
+    </div>
+  </div>
+
+  <!-- MAP PAGE -->
+  <div id="mapPage" class="page">
+    <div id="map"></div>
+    <div class="ar-status" style="top: 20px;">Sticker Map</div>
+    <div class="ar-ui">
+      <button id="backFromMapBtn" class="btn btn-secondary">Back</button>
+    </div>
+  </div>
+
+  <!-- DRAW PAGE -->
+  <div id="drawPage" class="page">
+    <canvas id="drawCanvas" width="512" height="512"></canvas>
+    
+    <div class="draw-controls">
+      <label>Color:</label>
+      <input id="colorPicker" type="color" value="#FF1493" />
+      
+      <label>Size:</label>
+      <input id="sizeRange" type="range" min="2" max="40" value="8" />
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const arContainer = document.getElementById('ar-container');
-            const stickerLayer = document.getElementById('sticker-layer');
-            const loadingScreen = document.getElementById('loading');
-            const permissionError = document.getElementById('permission-error');
-            const exitButton = document.getElementById('exit-button');
-            const retryButton = document.getElementById('retry-button');
-            
-            let cameraStream = null;
-            let stickers = [];
-            
-            // Sample sticker data - in a real app this would come from the AR system
-            const stickerData = [
-                { id: 1, x: 0.2, y: 0.3, type: 'smile' },
-                { id: 2, x: 0.7, y: 0.4, type: 'heart' },
-                { id: 3, x: 0.5, y: 0.6, type: 'star' },
-                { id: 4, x: 0.3, y: 0.7, type: 'cool' },
-                { id: 5, x: 0.8, y: 0.2, type: 'fire' },
-                { id: 6, x: 0.1, y: 0.5, type: 'music' },
-                { id: 7, x: 0.9, y: 0.8, type: 'game' },
-                { id: 8, x: 0.4, y: 0.1, type: 'food' },
-                { id: 9, x: 0.6, y: 0.9, type: 'animal' },
-                { id: 10, x: 0.2, y: 0.8, type: 'travel' },
-                { id: 11, x: 0.7, y: 0.7, type: 'sports' },
-                { id: 12, x: 0.5, y: 0.2, type: 'art' },
-                { id: 13, x: 0.3, y: 0.4, type: 'tech' },
-                { id: 14, x: 0.8, y: 0.5, type: 'nature' },
-                { id: 15, x: 0.1, y: 0.9, type: 'celebration' },
-                { id: 16, x: 0.9, y: 0.3, type: 'love' },
-                { id: 17, x: 0.4, y: 0.6, type: 'funny' },
-                { id: 18, x: 0.6, y: 0.4, type: 'inspiration' }
-            ];
-            
-            // Initialize AR experience
-            function initAR() {
-                // Request camera access
-                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                    navigator.mediaDevices.getUserMedia({ 
-                        video: { 
-                            facingMode: 'environment',
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 }
-                        } 
-                    })
-                    .then(function(stream) {
-                        cameraStream = stream;
-                        
-                        // Create video element for camera feed
-                        const video = document.createElement('video');
-                        video.id = 'camera-feed';
-                        video.srcObject = stream;
-                        video.autoplay = true;
-                        video.playsInline = true;
-                        
-                        // Insert video before sticker layer
-                        arContainer.insertBefore(video, stickerLayer);
-                        
-                        // Hide loading screen
-                        loadingScreen.style.display = 'none';
-                        
-                        // Initialize stickers
-                        initStickers();
-                        
-                        // Initialize device motion
-                        initDeviceMotion();
-                    })
-                    .catch(function(error) {
-                        console.error('Camera error:', error);
-                        loadingScreen.style.display = 'none';
-                        permissionError.style.display = 'flex';
-                    });
-                } else {
-                    // Fallback for devices without camera access
-                    console.error('Camera not supported');
-                    loadingScreen.style.display = 'none';
-                    permissionError.style.display = 'flex';
-                }
-            }
-            
-            // Initialize stickers in the AR space
-            function initStickers() {
-                stickerData.forEach(sticker => {
-                    const stickerElement = document.createElement('div');
-                    stickerElement.className = 'sticker';
-                    stickerElement.dataset.id = sticker.id;
-                    
-                    // Set sticker position based on data (in a real app, this would be calculated by AR system)
-                    stickerElement.style.left = `${sticker.x * 100}%`;
-                    stickerElement.style.top = `${sticker.y * 100}%`;
-                    
-                    // Set sticker image based on type
-                    stickerElement.style.backgroundImage = `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><circle cx="50" cy="50" r="45" fill="%23FFD700" stroke="%23FFA500" stroke-width="2"/><text x="50" y="60" font-family="Arial" font-size="30" text-anchor="middle" fill="%23000">${sticker.type.charAt(0).toUpperCase()}</text></svg>')`;
-                    
-                    stickerLayer.appendChild(stickerElement);
-                    stickers.push(stickerElement);
-                });
-            }
-            
-            // Initialize device motion for AR effect
-            function initDeviceMotion() {
-                if (window.DeviceOrientationEvent) {
-                    window.addEventListener('deviceorientation', handleOrientation);
-                } else {
-                    console.warn('Device orientation not supported');
-                    // Fallback: simulate AR movement with mouse/touch
-                    initFallbackMotion();
-                }
-            }
-            
-            // Handle device orientation for AR effect
-            function handleOrientation(event) {
-                // Use gamma (left-to-right tilt) and beta (front-to-back tilt) for parallax effect
-                const tiltX = event.gamma / 45; // Normalize to -1 to 1
-                const tiltY = event.beta / 45;  // Normalize to -1 to 1
-                
-                // Apply parallax effect to stickers
-                stickers.forEach(sticker => {
-                    const x = parseFloat(sticker.style.left) / 100;
-                    const y = parseFloat(sticker.style.top) / 100;
-                    
-                    // Calculate parallax offset based on sticker position and device tilt
-                    const offsetX = tiltX * 30 * (0.5 - x);
-                    const offsetY = tiltY * 30 * (0.5 - y);
-                    
-                    // Apply transform to create 3D effect
-                    sticker.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
-                });
-            }
-            
-            // Fallback for devices without device orientation
-            function initFallbackMotion() {
-                let mouseX = 0.5;
-                let mouseY = 0.5;
-                
-                document.addEventListener('mousemove', function(e) {
-                    mouseX = e.clientX / window.innerWidth;
-                    mouseY = e.clientY / window.innerHeight;
-                    updateStickerParallax();
-                });
-                
-                document.addEventListener('touchmove', function(e) {
-                    if (e.touches.length > 0) {
-                        mouseX = e.touches[0].clientX / window.innerWidth;
-                        mouseY = e.touches[0].clientY / window.innerHeight;
-                        updateStickerParallax();
-                    }
-                });
-                
-                function updateStickerParallax() {
-                    const tiltX = (mouseX - 0.5) * 2;
-                    const tiltY = (mouseY - 0.5) * 2;
-                    
-                    stickers.forEach(sticker => {
-                        const x = parseFloat(sticker.style.left) / 100;
-                        const y = parseFloat(sticker.style.top) / 100;
-                        
-                        const offsetX = tiltX * 30 * (0.5 - x);
-                        const offsetY = tiltY * 30 * (0.5 - y);
-                        
-                        sticker.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
-                    });
-                }
-            }
-            
-            // Exit AR mode
-            exitButton.addEventListener('click', function() {
-                if (cameraStream) {
-                    cameraStream.getTracks().forEach(track => track.stop());
-                }
-                // In a real app, this would return to the previous screen
-                alert('Exiting AR mode. In the actual app, this would return to the previous screen.');
-            });
-            
-            // Retry camera access
-            retryButton.addEventListener('click', function() {
-                permissionError.style.display = 'none';
-                loadingScreen.style.display = 'flex';
-                initAR();
-            });
-            
-            // Start AR experience
-            initAR();
-        });
-    </script>
+    <div class="btn-group">
+      <button id="clearDrawBtn" class="btn btn-secondary">Clear</button>
+      <button id="saveStickerBtn" class="btn btn-primary">Save & Place</button>
+    </div>
+    
+    <div class="btn-group" style="margin-top: 10px;">
+      <button id="backToHomeBtn" class="btn btn-secondary">Back</button>
+    </div>
+  </div>
+
+  <!-- AR PAGE -->
+  <div id="arPage" class="page">
+    <video id="arVideo" autoplay playsinline muted></video>
+    <canvas id="three-canvas"></canvas>
+    
+    <div class="reticle"></div>
+    
+    <div class="ar-status" id="arStatus">Initializing AR...</div>
+    
+    <div class="sticker-info">
+      <div>Nearby Stickers:</div>
+      <div class="sticker-count" id="stickerCount">0</div>
+    </div>
+    
+    <div class="ar-ui">
+      <button id="placeStickerBtn" class="btn btn-primary" style="display:none;">Place Here</button>
+      <button id="exitArBtn" class="btn btn-danger">Exit AR</button>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  
+  <!-- Main Application Script -->
+  <script src="./main.js"></script>
 </body>
 </html>
