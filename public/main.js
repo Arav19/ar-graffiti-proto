@@ -132,13 +132,23 @@ const WORLD_ORIGIN = {
   lon: -73.985130
 };
 
-// Convert GPS coordinates to absolute world position in meters
+// FIXED: Proper GPS to Cartesian coordinate conversion
 function gpsToAbsoluteWorldPosition(lat, lon) {
-  const dLat = (lat - WORLD_ORIGIN.lat) * Math.PI / 180;
-  const dLon = (lon - WORLD_ORIGIN.lon) * Math.PI / 180;
+  const earthRadius = 6378137; // meters
   
-  const x = dLon * EARTH_RADIUS * Math.cos(WORLD_ORIGIN.lat * Math.PI / 180);
-  const z = -dLat * EARTH_RADIUS; // North is negative Z in THREE.js
+  // Convert latitude and longitude from degrees to radians
+  const latRad = lat * Math.PI / 180;
+  const lonRad = lon * Math.PI / 180;
+  const originLatRad = WORLD_ORIGIN.lat * Math.PI / 180;
+  const originLonRad = WORLD_ORIGIN.lon * Math.PI / 180;
+  
+  // Calculate differences in radians
+  const dLat = latRad - originLatRad;
+  const dLon = lonRad - originLonRad;
+  
+  // Calculate Cartesian coordinates (X: East-West, Z: North-South)
+  const x = dLon * earthRadius * Math.cos(originLatRad);
+  const z = -dLat * earthRadius; // Negative because North should be -Z
   
   return { x, z };
 }
@@ -174,6 +184,8 @@ function startGPSWatch() {
         camera.position.x = worldPos.x;
         camera.position.z = worldPos.z;
         camera.position.y = 1.6;
+        
+        console.log(`GPS Updated: Camera at (${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`);
       }
     },
     (err) => console.warn("GPS watch error:", err),
@@ -230,14 +242,15 @@ function createStickerMesh(base64Image, sizeMeters = 1.2) {
   
   const mesh = new THREE.Mesh(geometry, material);
   
-  // Flat on ground - NEVER changes
-  mesh.rotation.x = -Math.PI / 2;
+  // FIXED: Make sticker vertical (facing user), not flat on ground
+  mesh.rotation.x = 0; // Remove the -Math.PI/2 that made it flat
   mesh.rotation.y = 0;
-  mesh.rotation.z = 0;
-  mesh.position.y = 0.02;
   
-  // Prevent automatic matrix updates (position is set once and locked)
-  mesh.matrixAutoUpdate = false;
+  // Position slightly above ground to avoid z-fighting
+  mesh.position.y = 0.5;
+  
+  // Keep matrix auto-update enabled for proper rendering
+  mesh.matrixAutoUpdate = true;
   
   return mesh;
 }
@@ -305,13 +318,29 @@ function stopOrientationTracking() {
   window.removeEventListener("deviceorientation", handleDeviceOrientation, true);
 }
 
+/* ===== STICKER BILLBOARDING ===== */
+function updateStickerBillboarding() {
+  if (!camera) return;
+  
+  stickerMeshes.forEach((entry) => {
+    const { mesh } = entry;
+    
+    // Make sticker face camera (billboard behavior)
+    mesh.lookAt(camera.position);
+    
+    // Keep sticker upright - only rotate around Y axis
+    mesh.rotation.x = 0;
+    mesh.rotation.z = 0;
+  });
+}
+
 /* ===== UPDATE STICKER VISIBILITY ===== */
 function updateStickerVisibility() {
   if (!userGPS) return;
   
   let nearbyCount = 0;
   
-  stickerMeshes.forEach((entry) => {
+  stickerMeshes.forEach((entry, id) => {
     const { mesh } = entry;
     
     // Calculate distance from camera to sticker (sticker position NEVER changes)
@@ -321,7 +350,14 @@ function updateStickerVisibility() {
     
     // Show only within 100m
     mesh.visible = distance < 100;
-    if (mesh.visible) nearbyCount++;
+    if (mesh.visible) {
+      nearbyCount++;
+      
+      // Debug first sticker
+      if (nearbyCount === 1) {
+        console.log(`Nearest sticker: ${distance.toFixed(1)}m away at world (${mesh.position.x.toFixed(1)}, ${mesh.position.z.toFixed(1)})`);
+      }
+    }
   });
   
   if (stickerCount) {
@@ -343,16 +379,18 @@ onChildAdded(stickersRef, (snap) => {
   const worldPos = gpsToAbsoluteWorldPosition(data.lat, data.lon);
   mesh.position.x = worldPos.x;
   mesh.position.z = worldPos.z;
-  mesh.position.y = 0.02;
-  
-  // Update matrix once and lock it
-  mesh.updateMatrix();
+  mesh.position.y = 0.5;
   
   scene.add(mesh);
   stickerMeshes.set(id, { mesh, data });
   allStickerData.push({ id, ...data });
   
-  console.log(`Sticker ${id} LOCKED at GPS (${data.lat.toFixed(6)}, ${data.lon.toFixed(6)}) = World (${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`);
+  // Enhanced logging
+  console.log(`Sticker ${id} placed at:`, {
+    gps: `(${data.lat.toFixed(6)}, ${data.lon.toFixed(6)})`,
+    world: `(${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`,
+    distanceFromOrigin: Math.sqrt(worldPos.x**2 + worldPos.z**2).toFixed(1) + 'm'
+  });
   
   updateMapMarkers();
 });
@@ -463,6 +501,7 @@ function startRendering() {
     requestAnimationFrame(animate);
     
     updateStickerVisibility();
+    updateStickerBillboarding(); // Make stickers face camera
     renderer.render(scene, camera);
   }
   
@@ -606,7 +645,12 @@ async function enterARMode(placingSticker = false) {
       accuracy: coords.accuracy
     };
     
-    // Set initial camera position
+    // Reset camera position and rotation
+    camera.position.set(0, 1.6, 0);
+    camera.rotation.set(0, 0, 0);
+    camera.quaternion.identity();
+    
+    // Set initial camera position based on GPS
     const worldPos = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
     camera.position.x = worldPos.x;
     camera.position.z = worldPos.z;

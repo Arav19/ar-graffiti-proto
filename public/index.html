@@ -8,7 +8,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#000000" />
   <title>GPS AR Stickers</title>
-
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     
@@ -259,6 +262,16 @@
       border-radius: 50%;
     }
 
+    /* ===== MAP PAGE ===== */
+    #mapPage {
+      padding: 0;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
     /* Loading indicator */
     .loading {
       display: inline-block;
@@ -289,7 +302,7 @@
 
   <!-- MAP PAGE -->
   <div id="mapPage" class="page">
-    <div id="map" style="width: 100%; height: 100%;"></div>
+    <div id="map"></div>
     <div class="ar-status" style="top: 20px;">Sticker Map</div>
     <div class="ar-ui">
       <button id="backFromMapBtn" class="btn btn-secondary">Back</button>
@@ -338,6 +351,10 @@
     </div>
   </div>
 
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Three.js -->
   <script type="module" src="./main.js"></script>
 </body>
 </html>
