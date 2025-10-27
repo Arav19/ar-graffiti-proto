@@ -12,6 +12,13 @@
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   
+  <!-- Three.js -->
+  <script src="https://unpkg.com/three@0.171.0/build/three.min.js"></script>
+  
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js"></script>
+  
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     
@@ -286,29 +293,6 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
-
-    /* Debug controls for movement testing */
-    .debug-controls {
-      position: fixed;
-      bottom: 120px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      display: flex;
-      gap: 10px;
-      padding: 10px;
-      background: rgba(0, 0, 0, 0.5);
-      border-radius: 10px;
-    }
-
-    .debug-btn {
-      padding: 8px 12px;
-      background: rgba(255, 255, 255, 0.2);
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-    }
   </style>
 </head>
 <body>
@@ -367,14 +351,6 @@
       <div>Nearby Stickers:</div>
       <div class="sticker-count" id="stickerCount">0</div>
     </div>
-
-    <!-- Debug movement controls (visible during development) -->
-    <div class="debug-controls" id="debugControls" style="display: none;">
-      <button class="debug-btn" onclick="moveForward()">↑ Forward</button>
-      <button class="debug-btn" onclick="moveBackward()">↓ Back</button>
-      <button class="debug-btn" onclick="moveLeft()">← Left</button>
-      <button class="debug-btn" onclick="moveRight()">→ Right</button>
-    </div>
     
     <div class="ar-ui">
       <button id="placeStickerBtn" class="btn btn-primary" style="display:none;">Place Here</button>
@@ -385,68 +361,165 @@
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   
-  <!-- Three.js and main app -->
-  <script type="module" src="./main.js"></script>
-
-  <!-- Debug movement functions -->
+  <!-- Main Application Script -->
   <script>
-    // Debug movement functions for testing
-    function moveForward() {
-      if (window.visualTracker && window.visualTracker.isTracking) {
-        const direction = new THREE.Vector3(0, 0, -1);
-        if (window.camera) {
-          direction.applyQuaternion(window.camera.quaternion);
-        }
-        direction.y = 0;
-        direction.normalize().multiplyScalar(1.0);
-        window.visualTracker.devicePosition.add(direction);
-        console.log('Moved forward 1m');
+    console.log("🚀 AR Stickers App Starting...");
+
+    // Simple page navigation system
+    const homePage = document.getElementById("homePage");
+    const drawPage = document.getElementById("drawPage");
+    const arPage = document.getElementById("arPage");
+    const mapPage = document.getElementById("mapPage");
+
+    function showPage(pageName) {
+      console.log("Navigating to:", pageName);
+      
+      // Hide all pages
+      [homePage, drawPage, arPage, mapPage].forEach(p => {
+        p.classList.remove("active");
+      });
+      
+      // Show selected page
+      if (pageName === "home") {
+        homePage.classList.add("active");
+      } else if (pageName === "draw") {
+        drawPage.classList.add("active");
+      } else if (pageName === "ar") {
+        arPage.classList.add("active");
+      } else if (pageName === "map") {
+        mapPage.classList.add("active");
+        // Initialize map when shown
+        setTimeout(() => {
+          if (typeof initMap === 'function') {
+            initMap();
+          }
+        }, 100);
       }
     }
 
-    function moveBackward() {
-      if (window.visualTracker && window.visualTracker.isTracking) {
-        const direction = new THREE.Vector3(0, 0, 1);
-        if (window.camera) {
-          direction.applyQuaternion(window.camera.quaternion);
-        }
-        direction.y = 0;
-        direction.normalize().multiplyScalar(1.0);
-        window.visualTracker.devicePosition.add(direction);
-        console.log('Moved backward 1m');
+    // Setup button event listeners
+    document.getElementById("createStickerBtn").addEventListener("click", () => {
+      console.log("Create Sticker clicked");
+      showPage("draw");
+    });
+
+    document.getElementById("exploreBtn").addEventListener("click", () => {
+      console.log("Explore clicked");
+      showPage("ar");
+      // In a real app, this would start AR mode
+      document.getElementById("arStatus").textContent = "AR Mode - Basic navigation working!";
+    });
+
+    document.getElementById("mapBtn").addEventListener("click", () => {
+      console.log("Map clicked");
+      showPage("map");
+    });
+
+    document.getElementById("saveStickerBtn").addEventListener("click", () => {
+      console.log("Save Sticker clicked");
+      showPage("ar");
+      document.getElementById("arStatus").textContent = "Ready to place sticker!";
+      document.getElementById("placeStickerBtn").style.display = "";
+    });
+
+    document.getElementById("placeStickerBtn").addEventListener("click", () => {
+      console.log("Place Sticker clicked");
+      document.getElementById("arStatus").textContent = "Sticker placed! (Demo)";
+      document.getElementById("placeStickerBtn").style.display = "none";
+    });
+
+    document.getElementById("exitArBtn").addEventListener("click", () => {
+      console.log("Exit AR clicked");
+      showPage("home");
+    });
+
+    document.getElementById("backToHomeBtn").addEventListener("click", () => {
+      console.log("Back to Home clicked");
+      showPage("home");
+    });
+
+    document.getElementById("backFromMapBtn").addEventListener("click", () => {
+      console.log("Back from Map clicked");
+      showPage("home");
+    });
+
+    document.getElementById("clearDrawBtn").addEventListener("click", () => {
+      console.log("Clear drawing");
+      const canvas = document.getElementById("drawCanvas");
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    // Simple drawing functionality
+    const drawCanvas = document.getElementById("drawCanvas");
+    const drawCtx = drawCanvas.getContext("2d");
+    let isDrawing = false;
+
+    function getDrawPos(e) {
+      const rect = drawCanvas.getBoundingClientRect();
+      const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
+      const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
+      return {
+        x: x * (drawCanvas.width / rect.width),
+        y: y * (drawCanvas.height / rect.height)
+      };
+    }
+
+    drawCanvas.addEventListener("pointerdown", (e) => {
+      isDrawing = true;
+      drawCtx.strokeStyle = document.getElementById("colorPicker").value;
+      drawCtx.lineWidth = parseInt(document.getElementById("sizeRange").value);
+      drawCtx.lineCap = "round";
+      drawCtx.lineJoin = "round";
+      const pos = getDrawPos(e);
+      drawCtx.beginPath();
+      drawCtx.moveTo(pos.x, pos.y);
+    });
+
+    drawCanvas.addEventListener("pointermove", (e) => {
+      if (!isDrawing) return;
+      const pos = getDrawPos(e);
+      drawCtx.lineTo(pos.x, pos.y);
+      drawCtx.stroke();
+    });
+
+    drawCanvas.addEventListener("pointerup", () => isDrawing = false);
+    drawCanvas.addEventListener("pointerleave", () => isDrawing = false);
+
+    // Simple map initialization
+    function initMap() {
+      console.log("Initializing map...");
+      const mapElement = document.getElementById('map');
+      
+      if (!mapElement) {
+        console.error("Map element not found");
+        return;
+      }
+
+      try {
+        // Create a simple map centered on default location
+        const map = L.map('map').setView([40.7589, -73.9851], 15);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap',
+          maxZoom: 19
+        }).addTo(map);
+        
+        // Add a marker
+        L.marker([40.7589, -73.9851]).addTo(map)
+          .bindPopup('Demo Location')
+          .openPopup();
+          
+        console.log("Map initialized successfully");
+      } catch (error) {
+        console.error("Map initialization failed:", error);
+        document.getElementById('map').innerHTML = '<div style="color:white; padding:20px; text-align:center;">Map failed to load</div>';
       }
     }
 
-    function moveLeft() {
-      if (window.visualTracker && window.visualTracker.isTracking) {
-        const direction = new THREE.Vector3(-1, 0, 0);
-        if (window.camera) {
-          direction.applyQuaternion(window.camera.quaternion);
-        }
-        direction.y = 0;
-        direction.normalize().multiplyScalar(1.0);
-        window.visualTracker.devicePosition.add(direction);
-        console.log('Moved left 1m');
-      }
-    }
+    console.log("✅ All button listeners attached successfully!");
+    console.log("Try clicking the buttons - you should see navigation working now!");
 
-    function moveRight() {
-      if (window.visualTracker && window.visualTracker.isTracking) {
-        const direction = new THREE.Vector3(1, 0, 0);
-        if (window.camera) {
-          direction.applyQuaternion(window.camera.quaternion);
-        }
-        direction.y = 0;
-        direction.normalize().multiplyScalar(1.0);
-        window.visualTracker.devicePosition.add(direction);
-        console.log('Moved right 1m');
-      }
-    }
-
-    // Show debug controls in development
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      document.getElementById('debugControls').style.display = 'flex';
-    }
   </script>
 </body>
 </html>
