@@ -40,8 +40,8 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = firebase.initializeApp(firebaseConfig);
-const db = firebase.getDatabase(app);
-const stickersRef = firebase.ref(db, "stickers");
+const db = firebase.database();
+const stickersRef = db.ref("stickers");
 
 // ===== STATE VARIABLES =====
 let userGPS = null;
@@ -97,26 +97,28 @@ function getDrawPos(e) {
   };
 }
 
-drawCanvas.addEventListener("pointerdown", (e) => {
-  isDrawing = true;
-  drawCtx.strokeStyle = colorPicker.value;
-  drawCtx.lineWidth = parseInt(sizeRange.value);
-  drawCtx.lineCap = "round";
-  drawCtx.lineJoin = "round";
-  const pos = getDrawPos(e);
-  drawCtx.beginPath();
-  drawCtx.moveTo(pos.x, pos.y);
-});
+function setupDrawing() {
+  drawCanvas.addEventListener("pointerdown", (e) => {
+    isDrawing = true;
+    drawCtx.strokeStyle = colorPicker.value;
+    drawCtx.lineWidth = parseInt(sizeRange.value);
+    drawCtx.lineCap = "round";
+    drawCtx.lineJoin = "round";
+    const pos = getDrawPos(e);
+    drawCtx.beginPath();
+    drawCtx.moveTo(pos.x, pos.y);
+  });
 
-drawCanvas.addEventListener("pointermove", (e) => {
-  if (!isDrawing) return;
-  const pos = getDrawPos(e);
-  drawCtx.lineTo(pos.x, pos.y);
-  drawCtx.stroke();
-});
+  drawCanvas.addEventListener("pointermove", (e) => {
+    if (!isDrawing) return;
+    const pos = getDrawPos(e);
+    drawCtx.lineTo(pos.x, pos.y);
+    drawCtx.stroke();
+  });
 
-drawCanvas.addEventListener("pointerup", () => isDrawing = false);
-drawCanvas.addEventListener("pointerleave", () => isDrawing = false);
+  drawCanvas.addEventListener("pointerup", () => isDrawing = false);
+  drawCanvas.addEventListener("pointerleave", () => isDrawing = false);
+}
 
 // ===== GPS UTILITIES =====
 const EARTH_RADIUS = 6378137;
@@ -429,7 +431,7 @@ function exitARMode() {
 // ===== STICKER MANAGEMENT =====
 async function loadStickers() {
   try {
-    const snapshot = await firebase.get(stickersRef);
+    const snapshot = await stickersRef.get();
     const data = snapshot.val();
     
     if (data) {
@@ -478,7 +480,7 @@ async function placeSticker() {
       createdAt: Date.now()
     };
     
-    await firebase.push(stickersRef, stickerData);
+    await stickersRef.push(stickerData);
     
     arStatus.textContent = "Sticker placed successfully!";
     placeStickerBtn.style.display = "none";
@@ -553,43 +555,45 @@ function updateMapMarkers() {
 }
 
 // ===== BUTTON EVENT LISTENERS =====
-createStickerBtn.addEventListener("click", () => {
-  showPage("draw");
-});
+function setupEventListeners() {
+  createStickerBtn.addEventListener("click", () => {
+    showPage("draw");
+  });
 
-exploreBtn.addEventListener("click", () => {
-  showPage("ar");
-});
+  exploreBtn.addEventListener("click", () => {
+    showPage("ar");
+  });
 
-mapBtn.addEventListener("click", () => {
-  showPage("map");
-});
+  mapBtn.addEventListener("click", () => {
+    showPage("map");
+  });
 
-saveStickerBtn.addEventListener("click", () => {
-  // Save drawing and prepare for AR placement
-  pendingStickerImage = drawCanvas.toDataURL("image/png");
-  showPage("ar");
-});
+  saveStickerBtn.addEventListener("click", () => {
+    // Save drawing and prepare for AR placement
+    pendingStickerImage = drawCanvas.toDataURL("image/png");
+    showPage("ar");
+  });
 
-placeStickerBtn.addEventListener("click", () => {
-  placeSticker();
-});
+  placeStickerBtn.addEventListener("click", () => {
+    placeSticker();
+  });
 
-exitArBtn.addEventListener("click", () => {
-  exitARMode();
-});
+  exitArBtn.addEventListener("click", () => {
+    exitARMode();
+  });
 
-backToHomeBtn.addEventListener("click", () => {
-  showPage("home");
-});
+  backToHomeBtn.addEventListener("click", () => {
+    showPage("home");
+  });
 
-backFromMapBtn.addEventListener("click", () => {
-  showPage("home");
-});
+  backFromMapBtn.addEventListener("click", () => {
+    showPage("home");
+  });
 
-clearDrawBtn.addEventListener("click", () => {
-  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-});
+  clearDrawBtn.addEventListener("click", () => {
+    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  });
+}
 
 // ===== WINDOW RESIZE HANDLER =====
 window.addEventListener("resize", () => {
@@ -601,7 +605,7 @@ window.addEventListener("resize", () => {
 });
 
 // ===== FIREBASE LISTENERS =====
-firebase.onChildAdded(stickersRef, async (snap) => {
+stickersRef.on('child_added', async (snap) => {
   const id = snap.key;
   const data = snap.val();
   
@@ -629,7 +633,7 @@ firebase.onChildAdded(stickersRef, async (snap) => {
   }
 });
 
-firebase.onChildRemoved(stickersRef, (snap) => {
+stickersRef.on('child_removed', (snap) => {
   const id = snap.key;
   const entry = stickerMeshes.get(id);
   
@@ -645,4 +649,20 @@ firebase.onChildRemoved(stickersRef, (snap) => {
   updateMapMarkers();
 });
 
-console.log("✅ AR Stickers App Fully Loaded!");
+// ===== INITIALIZE APP =====
+function initApp() {
+  console.log("Initializing AR Stickers App...");
+  
+  // Setup event listeners
+  setupEventListeners();
+  setupDrawing();
+  
+  console.log("✅ AR Stickers App Fully Loaded!");
+  console.log("All buttons should now work:");
+  console.log("- Create Sticker → Draw page");
+  console.log("- Explore Stickers → AR mode");
+  console.log("- View Map → Map page");
+}
+
+// Start the app when the page loads
+window.addEventListener('DOMContentLoaded', initApp);
