@@ -1,4 +1,4 @@
-// main.js - GPS-anchored AR stickers with proper world-space positioning
+// main.js - GPS-anchored AR stickers with device orientation tracking
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import {
@@ -7,8 +7,7 @@ import {
   push,
   set,
   onChildAdded,
-  onChildRemoved,
-  onValue
+  onChildRemoved
 } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
 
 /* ===== FIREBASE CONFIG ===== */
@@ -30,9 +29,11 @@ const stickersRef = ref(db, "stickers");
 const homePage = document.getElementById("homePage");
 const drawPage = document.getElementById("drawPage");
 const arPage = document.getElementById("arPage");
+const mapPage = document.getElementById("mapPage");
 
 const createStickerBtn = document.getElementById("createStickerBtn");
 const exploreBtn = document.getElementById("exploreBtn");
+const mapBtn = document.getElementById("mapBtn");
 
 const drawCanvas = document.getElementById("drawCanvas");
 const colorPicker = document.getElementById("colorPicker");
@@ -40,6 +41,7 @@ const sizeRange = document.getElementById("sizeRange");
 const clearDrawBtn = document.getElementById("clearDrawBtn");
 const saveStickerBtn = document.getElementById("saveStickerBtn");
 const backToHomeBtn = document.getElementById("backToHomeBtn");
+const backFromMapBtn = document.getElementById("backFromMapBtn");
 
 const arVideo = document.getElementById("arVideo");
 const threeCanvas = document.getElementById("three-canvas");
@@ -49,12 +51,12 @@ const placeStickerBtn = document.getElementById("placeStickerBtn");
 const exitArBtn = document.getElementById("exitArBtn");
 
 /* ===== STATE ===== */
-let currentPage = "home";
 let userGPS = null; // { lat, lon, alt, accuracy }
-let userHeading = 0; // compass heading in degrees (0 = North)
 let gpsWatchId = null;
 let cameraStream = null;
-let pendingStickerImage = null; // base64 image waiting to be placed
+let pendingStickerImage = null;
+let leafletMap = null;
+let mapMarkers = [];
 
 function getUniqueUserId() {
   let uid = localStorage.getItem("ar_stickers_uid");
@@ -67,21 +69,20 @@ function getUniqueUserId() {
 
 /* ===== PAGE NAVIGATION ===== */
 function showPage(pageName) {
-  homePage.classList.remove("active");
-  drawPage.classList.remove("active");
-  arPage.classList.remove("active");
+  [homePage, drawPage, arPage, mapPage].forEach(p => p.classList.remove("active"));
   
   if (pageName === "home") homePage.classList.add("active");
   else if (pageName === "draw") drawPage.classList.add("active");
   else if (pageName === "ar") arPage.classList.add("active");
-  
-  currentPage = pageName;
+  else if (pageName === "map") {
+    mapPage.classList.add("active");
+    initMap();
+  }
 }
 
-/* ===== DRAWING CANVAS ===== */
+/* ===== DRAWING CANVAS WITH TRANSPARENT BACKGROUND ===== */
 const drawCtx = drawCanvas.getContext("2d");
-drawCtx.fillStyle = "#ffffff";
-drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height); // Transparent background
 
 let isDrawing = false;
 
@@ -117,19 +118,14 @@ drawCanvas.addEventListener("pointerup", () => isDrawing = false);
 drawCanvas.addEventListener("pointerleave", () => isDrawing = false);
 
 clearDrawBtn.addEventListener("click", () => {
-  drawCtx.fillStyle = "#ffffff";
-  drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
 });
 
 /* ===== GPS UTILITIES ===== */
-// CRITICAL: Calculate world position from GPS coordinates
-// Each sticker has absolute world coordinates based on its GPS
-// We convert lat/lon to meters using a simple flat-earth approximation (good for local areas <100km)
 const EARTH_RADIUS = 6378137; // meters
 
 function gpsToWorldPosition(lat, lon) {
-  // Convert lat/lon to meters (XZ plane)
-  // Use lat=0, lon=0 as origin (can be any reference point)
+  // Convert GPS to meters in world space
   const x = lon * (Math.PI / 180) * EARTH_RADIUS * Math.cos(lat * Math.PI / 180);
   const z = -lat * (Math.PI / 180) * EARTH_RADIUS; // negative Z for north
   return { x, z };
@@ -173,28 +169,6 @@ function stopGPSWatch() {
   }
 }
 
-// Compass heading (deviceorientation)
-function startHeadingWatch() {
-  function handleOrientation(e) {
-    if (e.alpha !== null) {
-      userHeading = e.alpha; // 0-360, 0 = North
-      updateCameraRotation();
-    }
-  }
-  
-  if (typeof DeviceOrientationEvent !== "undefined" && 
-      typeof DeviceOrientationEvent.requestPermission === "function") {
-    DeviceOrientationEvent.requestPermission().then(permission => {
-      if (permission === "granted") {
-        window.addEventListener("deviceorientationabsolute", handleOrientation, true);
-      }
-    }).catch(console.warn);
-  } else {
-    window.addEventListener("deviceorientationabsolute", handleOrientation, true);
-    window.addEventListener("deviceorientation", handleOrientation, true);
-  }
-}
-
 /* ===== THREE.JS SCENE ===== */
 const renderer = new THREE.WebGLRenderer({
   canvas: threeCanvas,
@@ -222,8 +196,8 @@ scene.add(light);
 // Store sticker meshes: stickerId -> { mesh, data }
 const stickerMeshes = new Map();
 
-/* ===== CREATE STICKER MESH ===== */
-function createStickerMesh(base64Image, sizeMeters = 0.4) {
+/* ===== CREATE STICKER MESH (BIGGER, TRANSPARENT) ===== */
+function createStickerMesh(base64Image, sizeMeters = 1.2) {
   const texture = new THREE.TextureLoader().load(base64Image);
   texture.encoding = THREE.sRGBEncoding;
   
@@ -232,16 +206,70 @@ function createStickerMesh(base64Image, sizeMeters = 0.4) {
     map: texture,
     transparent: true,
     side: THREE.DoubleSide,
-    depthWrite: false
+    depthWrite: false,
+    opacity: 1.0
   });
   
   const mesh = new THREE.Mesh(geometry, material);
   
-  // CRITICAL: Sticker always faces up (billboard effect would be added in update loop)
-  mesh.rotation.x = -Math.PI / 2; // Lie flat on ground
+  // ALWAYS flat on ground (no rotation, we'll handle orientation separately)
+  mesh.rotation.x = -Math.PI / 2; // Lie flat
+  mesh.rotation.y = 0;
+  mesh.rotation.z = 0;
   mesh.position.y = 0.01; // Slightly above ground
   
   return mesh;
+}
+
+/* ===== DEVICE ORIENTATION TRACKING (PROPER ROLL/PITCH/YAW) ===== */
+const zee = new THREE.Vector3(0, 0, 1);
+const euler = new THREE.Euler();
+const q0 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+
+function setObjectQuaternion(quaternion, alpha, beta, gamma, orient) {
+  const degToRad = Math.PI / 180;
+  const _x = beta ? beta * degToRad : 0;   // pitch
+  const _y = alpha ? alpha * degToRad : 0; // yaw
+  const _z = gamma ? gamma * degToRad : 0; // roll
+  
+  euler.set(_x, _y, _z, 'ZXY');
+  quaternion.setFromEuler(euler);
+  quaternion.multiply(q1);
+  quaternion.multiply(q0.setFromAxisAngle(zee, -orient * degToRad));
+}
+
+let screenOrientation = window.orientation || 0;
+window.addEventListener('orientationchange', () => {
+  screenOrientation = window.orientation || 0;
+});
+
+function handleDeviceOrientation(event) {
+  if (!event) return;
+  setObjectQuaternion(
+    camera.quaternion,
+    event.alpha,
+    event.beta,
+    event.gamma,
+    screenOrientation
+  );
+}
+
+function startOrientationTracking() {
+  if (typeof DeviceOrientationEvent !== "undefined" && 
+      typeof DeviceOrientationEvent.requestPermission === "function") {
+    DeviceOrientationEvent.requestPermission().then(permission => {
+      if (permission === "granted") {
+        window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+      }
+    }).catch(console.warn);
+  } else {
+    window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+  }
+}
+
+function stopOrientationTracking() {
+  window.removeEventListener("deviceorientation", handleDeviceOrientation, true);
 }
 
 /* ===== UPDATE CAMERA POSITION (GPS-based) ===== */
@@ -252,16 +280,7 @@ function updateCameraPosition() {
   const worldPos = gpsToWorldPosition(userGPS.lat, userGPS.lon);
   camera.position.x = worldPos.x;
   camera.position.z = worldPos.z;
-  camera.position.y = 1.6; // Eye level
-  
-  console.log("Camera world pos:", worldPos.x.toFixed(2), worldPos.z.toFixed(2));
-}
-
-/* ===== UPDATE CAMERA ROTATION (Compass-based) ===== */
-function updateCameraRotation() {
-  // Rotate camera to face forward based on compass heading
-  const headingRad = -userHeading * (Math.PI / 180);
-  camera.rotation.y = headingRad;
+  camera.position.y = 1.6; // Eye level - fixed height
 }
 
 /* ===== UPDATE STICKER VISIBILITY ===== */
@@ -289,7 +308,9 @@ function updateStickerVisibility() {
     if (mesh.visible) nearbyCount++;
   });
   
-  stickerCount.textContent = nearbyCount.toString();
+  if (stickerCount) {
+    stickerCount.textContent = nearbyCount.toString();
+  }
 }
 
 /* ===== FIREBASE LISTENERS ===== */
@@ -300,9 +321,9 @@ onChildAdded(stickersRef, (snap) => {
   if (stickerMeshes.has(id)) return;
   if (!data.image || !data.lat || !data.lon) return;
   
-  const mesh = createStickerMesh(data.image, 0.4);
+  const mesh = createStickerMesh(data.image, 1.2); // Bigger stickers
   
-  // CRITICAL: Set absolute world position based on GPS
+  // Set absolute world position based on GPS
   const worldPos = gpsToWorldPosition(data.lat, data.lon);
   mesh.position.x = worldPos.x;
   mesh.position.z = worldPos.z;
@@ -311,9 +332,10 @@ onChildAdded(stickersRef, (snap) => {
   scene.add(mesh);
   stickerMeshes.set(id, { mesh, data });
   
-  console.log(`Sticker ${id} placed at world pos:`, worldPos.x.toFixed(2), worldPos.z.toFixed(2));
+  console.log(`Sticker ${id} at GPS (${data.lat.toFixed(6)}, ${data.lon.toFixed(6)})`);
   
   updateStickerVisibility();
+  updateMapMarkers();
 });
 
 onChildRemoved(stickersRef, (snap) => {
@@ -329,7 +351,65 @@ onChildRemoved(stickersRef, (snap) => {
   }
   
   updateStickerVisibility();
+  updateMapMarkers();
 });
+
+/* ===== MAP INTEGRATION ===== */
+function initMap() {
+  if (leafletMap) {
+    leafletMap.invalidateSize();
+    return;
+  }
+  
+  // Initialize Leaflet map
+  leafletMap = L.map('map').setView([40.7589, -73.9851], 13); // Default NYC
+  
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(leafletMap);
+  
+  // Center on user if GPS available
+  if (userGPS) {
+    leafletMap.setView([userGPS.lat, userGPS.lon], 15);
+    
+    // Add user marker
+    L.marker([userGPS.lat, userGPS.lon], {
+      icon: L.divIcon({
+        className: 'user-marker',
+        html: '📍',
+        iconSize: [30, 30]
+      })
+    }).addTo(leafletMap).bindPopup("You are here");
+  }
+  
+  updateMapMarkers();
+}
+
+function updateMapMarkers() {
+  if (!leafletMap) return;
+  
+  // Clear existing markers
+  mapMarkers.forEach(m => leafletMap.removeLayer(m));
+  mapMarkers = [];
+  
+  // Add sticker markers
+  stickerMeshes.forEach((entry, id) => {
+    const { data } = entry;
+    if (!data.lat || !data.lon) return;
+    
+    const marker = L.marker([data.lat, data.lon], {
+      icon: L.divIcon({
+        className: 'sticker-marker',
+        html: '🎨',
+        iconSize: [25, 25]
+      })
+    }).addTo(leafletMap);
+    
+    marker.bindPopup(`<img src="${data.image}" style="width:100px;height:100px;"/>`);
+    mapMarkers.push(marker);
+  });
+}
 
 /* ===== RENDER LOOP ===== */
 let isRendering = false;
@@ -390,7 +470,29 @@ createStickerBtn.addEventListener("click", () => {
 });
 
 exploreBtn.addEventListener("click", async () => {
-  await enterARMode(false); // Explore without placing
+  await enterARMode(false);
+});
+
+mapBtn.addEventListener("click", async () => {
+  // Get GPS before showing map
+  if (!userGPS) {
+    try {
+      const coords = await getCurrentGPS();
+      userGPS = {
+        lat: coords.latitude,
+        lon: coords.longitude,
+        alt: coords.altitude || 0,
+        accuracy: coords.accuracy
+      };
+    } catch (e) {
+      console.warn("GPS not available for map");
+    }
+  }
+  showPage("map");
+});
+
+backFromMapBtn.addEventListener("click", () => {
+  showPage("home");
 });
 
 backToHomeBtn.addEventListener("click", () => {
@@ -398,7 +500,7 @@ backToHomeBtn.addEventListener("click", () => {
 });
 
 saveStickerBtn.addEventListener("click", async () => {
-  // Save drawing to base64
+  // Save drawing to base64 with transparent background
   pendingStickerImage = drawCanvas.toDataURL("image/png");
   
   // Enter AR mode to place it
@@ -433,8 +535,7 @@ placeStickerBtn.addEventListener("click", async () => {
     pendingStickerImage = null;
     
     // Clear the drawing
-    drawCtx.fillStyle = "#ffffff";
-    drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     
   } catch (e) {
     console.error("Failed to place sticker:", e);
@@ -492,9 +593,9 @@ async function enterARMode(placingSticker = false) {
     return;
   }
   
-  // Start watching GPS and heading
+  // Start watching GPS and orientation
   startGPSWatch();
-  startHeadingWatch();
+  startOrientationTracking();
   
   // Start rendering
   startRendering();
@@ -503,7 +604,7 @@ async function enterARMode(placingSticker = false) {
   if (placingSticker && pendingStickerImage) {
     placeStickerBtn.style.display = "";
     placeStickerBtn.disabled = false;
-    arStatus.textContent = "Point camera at ground & tap Place";
+    arStatus.textContent = "Point at ground & tap Place";
   } else {
     placeStickerBtn.style.display = "none";
     arStatus.textContent = "Exploring stickers...";
@@ -513,6 +614,7 @@ async function enterARMode(placingSticker = false) {
 function exitARMode() {
   stopCamera();
   stopGPSWatch();
+  stopOrientationTracking();
   stopRendering();
   placeStickerBtn.style.display = "none";
   pendingStickerImage = null;
@@ -527,4 +629,3 @@ window.addEventListener("resize", () => {
 
 /* ===== INITIALIZATION ===== */
 console.log("AR Stickers app loaded");
-arStatus.textContent = "Ready";
