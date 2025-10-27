@@ -208,6 +208,9 @@ scene.add(light);
 // Store sticker meshes: stickerId -> { mesh, data, worldPos }
 const stickerMeshes = new Map();
 
+// GPS origin point (first user GPS becomes origin)
+let gpsOrigin = null;
+
 /* ===== CREATE STICKER MESH ===== */
 function createStickerMesh(base64Image, sizeMeters = 1.2) {
   const texture = new THREE.TextureLoader().load(base64Image);
@@ -296,17 +299,21 @@ function stopOrientationTracking() {
 function updateCameraPosition() {
   if (!userGPS) return;
   
-  // Convert user GPS to ABSOLUTE world position (using fixed world origin)
-  const worldPos = gpsToWorldMeters(userGPS.lat, userGPS.lon);
-  camera.position.x = worldPos.x;
-  camera.position.z = worldPos.z;
-  camera.position.y = 1.6;
+  // Set GPS origin on first position
+  if (!gpsOrigin) {
+    gpsOrigin = { lat: userGPS.lat, lon: userGPS.lon };
+    console.log("GPS origin set:", gpsOrigin);
+  }
   
-  console.log(`Camera at world: (${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)}) GPS: (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)})`);
+  // Convert user GPS to local position relative to origin
+  const localPos = gpsToMeters(userGPS.lat, userGPS.lon, gpsOrigin.lat, gpsOrigin.lon);
+  camera.position.x = localPos.x;
+  camera.position.z = localPos.z;
+  camera.position.y = 1.6;
 }
 
 function updateStickerPositions() {
-  if (!userGPS) return;
+  if (!userGPS || !gpsOrigin) return;
   
   let nearbyCount = 0;
   
@@ -317,15 +324,14 @@ function updateStickerPositions() {
       return;
     }
     
-    // Convert sticker GPS to ABSOLUTE world position (using same fixed origin)
-    const stickerWorld = gpsToWorldMeters(data.lat, data.lon);
+    // Convert sticker GPS to local position relative to origin
+    const stickerLocal = gpsToMeters(data.lat, data.lon, gpsOrigin.lat, gpsOrigin.lon);
     
-    // Set mesh at ABSOLUTE world position (never changes)
-    mesh.position.x = stickerWorld.x;
-    mesh.position.z = stickerWorld.z;
+    mesh.position.x = stickerLocal.x;
+    mesh.position.z = stickerLocal.z;
     mesh.position.y = 0.02;
     
-    // Calculate distance from camera to sticker
+    // Calculate distance from camera
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
