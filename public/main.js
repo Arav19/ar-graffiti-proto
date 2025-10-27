@@ -1,4 +1,4 @@
-// main.js - GPS-anchored AR stickers with ABSOLUTE world positioning
+// main.js - GPS-anchored AR stickers with HYBRID positioning
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import {
@@ -59,6 +59,15 @@ let pendingStickerImage = null;
 let leafletMap = null;
 let mapMarkers = [];
 let allStickerData = [];
+
+// HYBRID POSITIONING SYSTEM
+let localOrigin = null; // Local coordinate system origin (user's starting point)
+let isLocalTrackingActive = false;
+let deviceMotionTracker = {
+  position: new THREE.Vector3(0, 0, 0),
+  velocity: new THREE.Vector3(0, 0, 0),
+  lastTimestamp: 0
+};
 
 function getUniqueUserId() {
   let uid = localStorage.getItem("ar_stickers_uid");
@@ -123,7 +132,7 @@ clearDrawBtn.addEventListener("click", () => {
   drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
 });
 
-/* ===== GPS UTILITIES ===== */
+/* ===== HYBRID POSITIONING SYSTEM ===== */
 const EARTH_RADIUS = 6378137; // meters
 
 // FIXED WORLD ORIGIN - Times Square, NYC (same for EVERYONE)
@@ -132,7 +141,7 @@ const WORLD_ORIGIN = {
   lon: -73.985130
 };
 
-// FIXED: Proper GPS to Cartesian coordinate conversion
+// Convert GPS coordinates to absolute world position in meters
 function gpsToAbsoluteWorldPosition(lat, lon) {
   const earthRadius = 6378137; // meters
   
@@ -153,6 +162,141 @@ function gpsToAbsoluteWorldPosition(lat, lon) {
   return { x, z };
 }
 
+// Convert absolute world position back to GPS
+function absoluteWorldPositionToGPS(worldX, worldZ) {
+  const earthRadius = 6378137;
+  const originLatRad = WORLD_ORIGIN.lat * Math.PI / 180;
+  
+  const dLon = worldX / (earthRadius * Math.cos(originLatRad));
+  const dLat = -worldZ / earthRadius;
+  
+  const lat = WORLD_ORIGIN.lat + (dLat * 180 / Math.PI);
+  const lon = WORLD_ORIGIN.lon + (dLon * 180 / Math.PI);
+  
+  return { lat, lon };
+}
+
+// Initialize local coordinate system when user enters AR
+function initializeLocalCoordinateSystem(userLat, userLon) {
+  const worldPos = gpsToAbsoluteWorldPosition(userLat, userLon);
+  localOrigin = {
+    worldX: worldPos.x,
+    worldZ: worldPos.z,
+    localX: 0,
+    localZ: 0,
+    timestamp: Date.now()
+  };
+  
+  console.log(`Local coordinate system initialized at GPS (${userLat}, ${userLon}) = World (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+  return localOrigin;
+}
+
+// Convert between local and global coordinate systems
+function localToGlobalPosition(localX, localZ) {
+  if (!localOrigin) return { x: localX, z: localZ };
+  
+  return {
+    x: localOrigin.worldX + localX,
+    z: localOrigin.worldZ + localZ
+  };
+}
+
+function globalToLocalPosition(globalX, globalZ) {
+  if (!localOrigin) return { x: globalX, z: globalZ };
+  
+  return {
+    x: globalX - localOrigin.worldX,
+    z: globalZ - localOrigin.worldZ
+  };
+}
+
+/* ===== DEVICE MOTION TRACKING ===== */
+function startDeviceMotionTracking() {
+  if (typeof DeviceMotionEvent === "undefined") {
+    console.warn("DeviceMotionEvent not supported");
+    return false;
+  }
+
+  function handleDeviceMotion(event) {
+    if (!event.accelerationIncludingGravity || !localOrigin) return;
+    
+    const now = Date.now();
+    const deltaTime = (now - deviceMotionTracker.lastTimestamp) / 1000;
+    
+    if (deviceMotionTracker.lastTimestamp === 0 || deltaTime > 1) {
+      deviceMotionTracker.lastTimestamp = now;
+      return;
+    }
+    
+    // Basic pedometer: detect steps from acceleration
+    const accel = event.accelerationIncludingGravity;
+    const totalAccel = Math.sqrt(
+      accel.x * accel.x + 
+      accel.y * accel.y + 
+      accel.z * accel.z
+    );
+    
+    // Simple step detection (you'd want more sophisticated algorithms in production)
+    if (totalAccel > 15) {
+      // Estimate step length (approx 0.7m per step)
+      const stepLength = 0.7;
+      
+      // Use camera direction to determine step direction
+      const direction = new THREE.Vector3(0, 0, -1);
+      direction.applyQuaternion(camera.quaternion);
+      direction.y = 0; // Keep movement horizontal
+      direction.normalize().multiplyScalar(stepLength);
+      
+      // Update local position based on steps
+      deviceMotionTracker.position.x += direction.x;
+      deviceMotionTracker.position.z += direction.z;
+      
+      // Update camera position in local coordinates
+      const localCamPos = globalToLocalPosition(camera.position.x, camera.position.z);
+      localCamPos.x = deviceMotionTracker.position.x;
+      localCamPos.z = deviceMotionTracker.position.z;
+      
+      const globalPos = localToGlobalPosition(localCamPos.x, localCamPos.z);
+      camera.position.x = globalPos.x;
+      camera.position.z = globalPos.z;
+      
+      console.log(`Step detected: Moved to local (${deviceMotionTracker.position.x.toFixed(2)}, ${deviceMotionTracker.position.z.toFixed(2)})`);
+    }
+    
+    deviceMotionTracker.lastTimestamp = now;
+  }
+
+  // Request permission and start tracking
+  if (typeof DeviceMotionEvent.requestPermission === "function") {
+    DeviceMotionEvent.requestPermission()
+      .then(permission => {
+        if (permission === "granted") {
+          window.addEventListener("devicemotion", handleDeviceMotion, true);
+          isLocalTrackingActive = true;
+          console.log("Device motion tracking started");
+        }
+      })
+      .catch(err => {
+        console.warn("Device motion permission denied:", err);
+      });
+  } else {
+    window.addEventListener("devicemotion", handleDeviceMotion, true);
+    isLocalTrackingActive = true;
+    console.log("Device motion tracking started (no permission required)");
+  }
+  
+  return true;
+}
+
+function stopDeviceMotionTracking() {
+  window.removeEventListener("devicemotion", handleDeviceMotion, true);
+  isLocalTrackingActive = false;
+  deviceMotionTracker.position.set(0, 0, 0);
+  deviceMotionTracker.velocity.set(0, 0, 0);
+  deviceMotionTracker.lastTimestamp = 0;
+}
+
+/* ===== GPS UTILITIES ===== */
 function getCurrentGPS() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -171,26 +315,46 @@ function startGPSWatch() {
   
   gpsWatchId = navigator.geolocation.watchPosition(
     (pos) => {
-      userGPS = {
+      const newGPS = {
         lat: pos.coords.latitude,
         lon: pos.coords.longitude,
         alt: pos.coords.altitude || 0,
         accuracy: pos.coords.accuracy
       };
       
-      // Update camera position in world space
-      if (camera) {
-        const worldPos = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
-        camera.position.x = worldPos.x;
-        camera.position.z = worldPos.z;
-        camera.position.y = 1.6;
-        
-        console.log(`GPS Updated: Camera at (${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`);
+      // Only update if we've moved significantly (more than 10 meters)
+      if (userGPS && calculateGPSDistance(userGPS, newGPS) < 10) {
+        return; // Ignore small movements that cause jitter
       }
+      
+      userGPS = newGPS;
+      
+      // Update local origin if we've moved significantly
+      if (localOrigin && calculateGPSDistance(
+        { lat: localOrigin.lat, lon: localOrigin.lon }, 
+        newGPS
+      ) > 20) {
+        initializeLocalCoordinateSystem(userGPS.lat, userGPS.lon);
+      }
+      
+      console.log(`GPS Updated: Accuracy ±${Math.round(userGPS.accuracy)}m`);
+      
     },
     (err) => console.warn("GPS watch error:", err),
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
   );
+}
+
+function calculateGPSDistance(gps1, gps2) {
+  const R = 6371000; // Earth radius in meters
+  const dLat = (gps2.lat - gps1.lat) * Math.PI / 180;
+  const dLon = (gps2.lon - gps1.lon) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(gps1.lat * Math.PI / 180) * Math.cos(gps2.lat * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
 }
 
 function stopGPSWatch() {
@@ -242,15 +406,12 @@ function createStickerMesh(base64Image, sizeMeters = 1.2) {
   
   const mesh = new THREE.Mesh(geometry, material);
   
-  // FIXED: Make sticker vertical (facing user), not flat on ground
-  mesh.rotation.x = 0; // Remove the -Math.PI/2 that made it flat
-  mesh.rotation.y = 0;
-  
-  // Position slightly above ground to avoid z-fighting
+  // Make sticker vertical (facing user)
+  mesh.rotation.x = 0;
   mesh.position.y = 0.5;
   
-  // Keep matrix auto-update enabled for proper rendering
-  mesh.matrixAutoUpdate = true;
+  // Lock the position - stickers should NEVER move once placed
+  mesh.matrixAutoUpdate = false;
   
   return mesh;
 }
@@ -288,7 +449,7 @@ window.addEventListener('orientationchange', () => {
 });
 
 function handleDeviceOrientation(event) {
-  if (!event.alpha) return;
+  if (!event.alpha || !isLocalTrackingActive) return;
   
   setDeviceQuaternion(
     camera.quaternion,
@@ -326,11 +487,19 @@ function updateStickerBillboarding() {
     const { mesh } = entry;
     
     // Make sticker face camera (billboard behavior)
-    mesh.lookAt(camera.position);
+    const tempMatrix = new THREE.Matrix4();
+    tempMatrix.lookAt(mesh.position, camera.position, mesh.up);
+    const targetQuaternion = new THREE.Quaternion();
+    targetQuaternion.setFromRotationMatrix(tempMatrix);
     
-    // Keep sticker upright - only rotate around Y axis
-    mesh.rotation.x = 0;
-    mesh.rotation.z = 0;
+    // Only rotate around Y axis to keep sticker upright
+    const euler = new THREE.Euler();
+    euler.setFromQuaternion(targetQuaternion);
+    euler.x = 0;
+    euler.z = 0;
+    mesh.quaternion.setFromEuler(euler);
+    
+    mesh.updateMatrix();
   });
 }
 
@@ -343,21 +512,14 @@ function updateStickerVisibility() {
   stickerMeshes.forEach((entry, id) => {
     const { mesh } = entry;
     
-    // Calculate distance from camera to sticker (sticker position NEVER changes)
+    // Calculate distance from camera to sticker
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
     
-    // Show only within 100m
-    mesh.visible = distance < 100;
-    if (mesh.visible) {
-      nearbyCount++;
-      
-      // Debug first sticker
-      if (nearbyCount === 1) {
-        console.log(`Nearest sticker: ${distance.toFixed(1)}m away at world (${mesh.position.x.toFixed(1)}, ${mesh.position.z.toFixed(1)})`);
-      }
-    }
+    // Show only within 50m (reduced for better performance)
+    mesh.visible = distance < 50;
+    if (mesh.visible) nearbyCount++;
   });
   
   if (stickerCount) {
@@ -381,12 +543,14 @@ onChildAdded(stickersRef, (snap) => {
   mesh.position.z = worldPos.z;
   mesh.position.y = 0.5;
   
+  // Update matrix once and lock it
+  mesh.updateMatrix();
+  
   scene.add(mesh);
   stickerMeshes.set(id, { mesh, data });
   allStickerData.push({ id, ...data });
   
-  // Enhanced logging
-  console.log(`Sticker ${id} placed at:`, {
+  console.log(`Sticker ${id} LOCKED at:`, {
     gps: `(${data.lat.toFixed(6)}, ${data.lon.toFixed(6)})`,
     world: `(${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`,
     distanceFromOrigin: Math.sqrt(worldPos.x**2 + worldPos.z**2).toFixed(1) + 'm'
@@ -501,7 +665,7 @@ function startRendering() {
     requestAnimationFrame(animate);
     
     updateStickerVisibility();
-    updateStickerBillboarding(); // Make stickers face camera
+    updateStickerBillboarding();
     renderer.render(scene, camera);
   }
   
@@ -645,20 +809,22 @@ async function enterARMode(placingSticker = false) {
       accuracy: coords.accuracy
     };
     
-    // Reset camera position and rotation
-    camera.position.set(0, 1.6, 0);
-    camera.rotation.set(0, 0, 0);
-    camera.quaternion.identity();
+    // Initialize hybrid positioning system
+    initializeLocalCoordinateSystem(userGPS.lat, userGPS.lon);
     
-    // Set initial camera position based on GPS
+    // Set initial camera position
     const worldPos = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
     camera.position.x = worldPos.x;
     camera.position.z = worldPos.z;
     camera.position.y = 1.6;
     
-    console.log(`Camera at GPS (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)}) = World (${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`);
+    console.log(`Hybrid AR started:`, {
+      gps: `(${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)})`,
+      world: `(${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`,
+      accuracy: `±${Math.round(userGPS.accuracy)}m`
+    });
     
-    arStatus.textContent = `GPS: ±${Math.round(coords.accuracy)}m`;
+    arStatus.textContent = `GPS locked ±${Math.round(coords.accuracy)}m | Local tracking active`;
     
   } catch (e) {
     console.error("GPS error:", e);
@@ -668,6 +834,7 @@ async function enterARMode(placingSticker = false) {
   
   startGPSWatch();
   startOrientationTracking();
+  startDeviceMotionTracking();
   startRendering();
   
   if (placingSticker && pendingStickerImage) {
@@ -684,9 +851,12 @@ function exitARMode() {
   stopCamera();
   stopGPSWatch();
   stopOrientationTracking();
+  stopDeviceMotionTracking();
   stopRendering();
   placeStickerBtn.style.display = "none";
   pendingStickerImage = null;
+  localOrigin = null;
+  isLocalTrackingActive = false;
 }
 
 /* ===== WINDOW RESIZE ===== */
@@ -696,4 +866,4 @@ window.addEventListener("resize", () => {
   camera.updateProjectionMatrix();
 });
 
-console.log("AR Stickers loaded - World Origin: Times Square");
+console.log("AR Stickers loaded - Hybrid Positioning System Ready");
