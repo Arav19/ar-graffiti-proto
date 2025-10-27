@@ -126,12 +126,18 @@ clearDrawBtn.addEventListener("click", () => {
 /* ===== GPS UTILITIES ===== */
 const EARTH_RADIUS = 6378137; // meters
 
-// Convert GPS to local meters (relative to origin)
-function gpsToMeters(lat, lon, originLat, originLon) {
-  const dLat = (lat - originLat) * Math.PI / 180;
-  const dLon = (lon - originLon) * Math.PI / 180;
+// FIXED WORLD ORIGIN - Times Square, NYC (everyone uses this same origin)
+const WORLD_ORIGIN = {
+  lat: 40.758896,  // Times Square latitude
+  lon: -73.985130  // Times Square longitude
+};
+
+// Convert GPS to absolute world meters (relative to fixed world origin)
+function gpsToWorldMeters(lat, lon) {
+  const dLat = (lat - WORLD_ORIGIN.lat) * Math.PI / 180;
+  const dLon = (lon - WORLD_ORIGIN.lon) * Math.PI / 180;
   
-  const x = dLon * EARTH_RADIUS * Math.cos(originLat * Math.PI / 180);
+  const x = dLon * EARTH_RADIUS * Math.cos(WORLD_ORIGIN.lat * Math.PI / 180);
   const z = -dLat * EARTH_RADIUS; // North is negative Z
   
   return { x, z };
@@ -201,9 +207,6 @@ scene.add(light);
 
 // Store sticker meshes: stickerId -> { mesh, data, worldPos }
 const stickerMeshes = new Map();
-
-// GPS origin point (first user GPS becomes origin)
-let gpsOrigin = null;
 
 /* ===== CREATE STICKER MESH ===== */
 function createStickerMesh(base64Image, sizeMeters = 1.2) {
@@ -293,21 +296,17 @@ function stopOrientationTracking() {
 function updateCameraPosition() {
   if (!userGPS) return;
   
-  // Set GPS origin on first position
-  if (!gpsOrigin) {
-    gpsOrigin = { lat: userGPS.lat, lon: userGPS.lon };
-    console.log("GPS origin set:", gpsOrigin);
-  }
-  
-  // Convert user GPS to local position relative to origin
-  const localPos = gpsToMeters(userGPS.lat, userGPS.lon, gpsOrigin.lat, gpsOrigin.lon);
-  camera.position.x = localPos.x;
-  camera.position.z = localPos.z;
+  // Convert user GPS to ABSOLUTE world position (using fixed world origin)
+  const worldPos = gpsToWorldMeters(userGPS.lat, userGPS.lon);
+  camera.position.x = worldPos.x;
+  camera.position.z = worldPos.z;
   camera.position.y = 1.6;
+  
+  console.log(`Camera at world: (${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)}) GPS: (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)})`);
 }
 
 function updateStickerPositions() {
-  if (!userGPS || !gpsOrigin) return;
+  if (!userGPS) return;
   
   let nearbyCount = 0;
   
@@ -318,14 +317,15 @@ function updateStickerPositions() {
       return;
     }
     
-    // Convert sticker GPS to local position relative to origin
-    const stickerLocal = gpsToMeters(data.lat, data.lon, gpsOrigin.lat, gpsOrigin.lon);
+    // Convert sticker GPS to ABSOLUTE world position (using same fixed origin)
+    const stickerWorld = gpsToWorldMeters(data.lat, data.lon);
     
-    mesh.position.x = stickerLocal.x;
-    mesh.position.z = stickerLocal.z;
+    // Set mesh at ABSOLUTE world position (never changes)
+    mesh.position.x = stickerWorld.x;
+    mesh.position.z = stickerWorld.z;
     mesh.position.y = 0.02;
     
-    // Calculate distance from camera
+    // Calculate distance from camera to sticker
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
