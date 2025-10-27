@@ -1,4 +1,4 @@
-// main.js - GPS AR Stickers - COMPLETE REWRITE
+// main.js - GPS AR Stickers - COMPLETE FIXED VERSION
 
 console.log("🚀 AR Stickers App Starting...");
 
@@ -82,7 +82,7 @@ function initializeDrawing() {
         return;
     }
     
-    // Clear canvas
+    // Clear canvas with white background
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
@@ -128,13 +128,13 @@ function initializeDrawing() {
         isDrawing = false;
     }
     
-    // Event listeners
+    // Mouse events
     canvas.addEventListener('mousedown', startDrawing);
     canvas.addEventListener('mousemove', draw);
     canvas.addEventListener('mouseup', stopDrawing);
     canvas.addEventListener('mouseout', stopDrawing);
     
-    // Touch support
+    // Touch events
     canvas.addEventListener('touchstart', (e) => {
         e.preventDefault();
         startDrawing(e.touches[0]);
@@ -150,6 +150,19 @@ function initializeDrawing() {
 
 // ===== GPS UTILITIES =====
 const WORLD_ORIGIN = { lat: 40.758896, lon: -73.985130 };
+const MAX_STICKER_DISTANCE = 100; // meters - only show stickers within 100m
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000; // Earth radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
 
 function gpsToWorldPosition(lat, lon) {
     const earthRadius = 6378137; // meters
@@ -192,21 +205,23 @@ function initializeThreeJS() {
     }
     
     try {
-        // Renderer
+        // Renderer - transparent for AR overlay
         renderer = new THREE.WebGLRenderer({ 
             canvas: canvas, 
             alpha: true, 
-            antialias: true 
+            antialias: true,
+            premultipliedAlpha: false
         });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setClearColor(0x000000, 0); // Transparent background
         
         // Scene
         scene = new THREE.Scene();
         
         // Camera
         camera = new THREE.PerspectiveCamera(
-            75, 
+            60, // Wide FOV for AR
             window.innerWidth / window.innerHeight, 
             0.1, 
             1000
@@ -214,10 +229,10 @@ function initializeThreeJS() {
         camera.position.set(0, 1.6, 0);
         
         // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
         scene.add(ambientLight);
         
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
         directionalLight.position.set(1, 1, 1);
         scene.add(directionalLight);
         
@@ -229,30 +244,82 @@ function initializeThreeJS() {
     }
 }
 
-function createStickerMesh(imageData, size = 2.0) {
-    return new Promise((resolve) => {
+function createStickerMesh(imageData, size = 3.0) {
+    return new Promise((resolve, reject) => {
         const textureLoader = new THREE.TextureLoader();
-        textureLoader.load(imageData, (texture) => {
-            const geometry = new THREE.PlaneGeometry(size, size);
-            const material = new THREE.MeshBasicMaterial({
-                map: texture,
-                transparent: true,
-                side: THREE.DoubleSide,
-                opacity: 0.9
-            });
-            
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.rotation.x = -Math.PI / 2; // Lay flat on ground
-            
-            resolve(mesh);
-        });
+        textureLoader.load(imageData, 
+            (texture) => {
+                console.log("✅ Texture loaded successfully");
+                
+                const geometry = new THREE.PlaneGeometry(size, size);
+                const material = new THREE.MeshBasicMaterial({
+                    map: texture,
+                    transparent: true,
+                    side: THREE.DoubleSide,
+                    opacity: 0.95,
+                    depthTest: false, // Critical for AR overlay
+                    depthWrite: false // Critical for AR overlay
+                });
+                
+                const mesh = new THREE.Mesh(geometry, material);
+                
+                // Make sticker vertical and face camera
+                mesh.rotation.x = 0; // Vertical, not flat
+                mesh.position.y = 1.5; // Eye level height
+                
+                console.log("✅ Sticker mesh created");
+                resolve(mesh);
+            },
+            undefined,
+            (error) => {
+                console.error("❌ Texture loading failed:", error);
+                reject(error);
+            }
+        );
     });
 }
 
 function updateStickerBillboarding() {
+    if (!camera) return;
+    
     stickerMeshes.forEach(({ mesh }) => {
+        // Make sticker always face camera (billboard effect)
         mesh.lookAt(camera.position);
+        
+        // Keep it upright - only rotate around Y axis
+        mesh.rotation.x = 0;
+        mesh.rotation.z = 0;
     });
+}
+
+function updateStickerVisibility() {
+    if (!userGPS || !camera) return;
+    
+    let nearbyCount = 0;
+    
+    stickerMeshes.forEach(({ mesh, data }) => {
+        // Calculate distance from user to sticker
+        const distance = calculateDistance(
+            userGPS.lat, userGPS.lon,
+            data.lat, data.lon
+        );
+        
+        // Only show stickers within 100 meters
+        const isNearby = distance <= MAX_STICKER_DISTANCE;
+        mesh.visible = isNearby;
+        
+        if (isNearby) {
+            nearbyCount++;
+        }
+    });
+    
+    // Update nearby sticker count
+    const stickerCount = document.getElementById("stickerCount");
+    if (stickerCount) {
+        stickerCount.textContent = nearbyCount.toString();
+    }
+    
+    return nearbyCount;
 }
 
 // ===== AR SYSTEM =====
@@ -267,6 +334,15 @@ async function initializeARMode() {
         if (arStatus) arStatus.textContent = "3D engine failed";
         return;
     }
+    
+    // Clear existing stickers first
+    stickerMeshes.forEach(({ mesh }) => {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        mesh.material.dispose();
+    });
+    stickerMeshes.clear();
+    allStickerData = [];
     
     // Start camera
     try {
@@ -313,6 +389,7 @@ async function initializeARMode() {
         camera.position.set(worldPos.x, 1.6, worldPos.z);
         
         console.log("📍 Location acquired:", userGPS);
+        console.log("🎯 Camera world position:", camera.position);
         if (arStatus) arStatus.textContent = `Location ready! Accuracy: ${Math.round(userGPS.accuracy)}m`;
         
     } catch (error) {
@@ -320,6 +397,8 @@ async function initializeARMode() {
         if (arStatus) arStatus.textContent = "Location access denied";
         // Continue anyway with demo location
         userGPS = { lat: 40.7589, lon: -73.9851, accuracy: 100 };
+        const worldPos = gpsToWorldPosition(userGPS.lat, userGPS.lon);
+        camera.position.set(worldPos.x, 1.6, worldPos.z);
     }
     
     // Load stickers
@@ -344,10 +423,12 @@ function startRendering() {
         
         if (renderer && scene && camera) {
             updateStickerBillboarding();
+            updateStickerVisibility();
             renderer.render(scene, camera);
         }
     }
     animate();
+    console.log("🔄 Rendering started");
 }
 
 function exitARMode() {
@@ -387,6 +468,8 @@ async function loadStickers() {
         
         if (!data) {
             console.log("ℹ️ No stickers found in database");
+            const arStatus = document.getElementById("arStatus");
+            if (arStatus) arStatus.textContent = "No stickers found. Be the first to place one!";
             return;
         }
         
@@ -395,36 +478,71 @@ async function loadStickers() {
             ...sticker
         }));
         
-        console.log(`📊 Found ${allStickerData.length} stickers`);
+        console.log(`📊 Found ${allStickerData.length} total stickers in database`);
         
-        // Create Three.js meshes for each sticker
-        for (const sticker of allStickerData) {
+        // Filter stickers by distance BEFORE creating meshes
+        let nearbyStickers = [];
+        if (userGPS) {
+            nearbyStickers = allStickerData.filter(sticker => {
+                const distance = calculateDistance(
+                    userGPS.lat, userGPS.lon,
+                    sticker.lat, sticker.lon
+                );
+                return distance <= MAX_STICKER_DISTANCE;
+            });
+            console.log(`📍 ${nearbyStickers.length} stickers within ${MAX_STICKER_DISTANCE}m`);
+        } else {
+            nearbyStickers = allStickerData; // Show all if no GPS
+        }
+        
+        // Create Three.js meshes only for nearby stickers
+        let loadedCount = 0;
+        for (const sticker of nearbyStickers) {
             if (sticker.image && sticker.lat && sticker.lon) {
                 try {
-                    const mesh = await createStickerMesh(sticker.image, 2.0);
+                    console.log(`🔄 Creating mesh for nearby sticker at (${sticker.lat.toFixed(4)}, ${sticker.lon.toFixed(4)})`);
+                    
+                    const mesh = await createStickerMesh(sticker.image, 3.0);
                     const worldPos = gpsToWorldPosition(sticker.lat, sticker.lon);
                     
-                    mesh.position.set(worldPos.x, 0.1, worldPos.z);
+                    // Position in world space
+                    mesh.position.set(worldPos.x, 1.5, worldPos.z);
+                    
+                    // Add to scene
                     scene.add(mesh);
                     
+                    // Store reference
                     stickerMeshes.set(sticker.id, { mesh, data: sticker });
                     
-                    console.log(`✅ Loaded sticker at (${sticker.lat.toFixed(4)}, ${sticker.lon.toFixed(4)})`);
+                    loadedCount++;
+                    console.log(`✅ Loaded nearby sticker ${loadedCount}/${nearbyStickers.length}`);
+                    
                 } catch (error) {
                     console.error(`❌ Failed to load sticker ${sticker.id}:`, error);
                 }
             }
         }
         
-        // Update UI
+        // Update UI with accurate counts
         const stickerCount = document.getElementById("stickerCount");
         if (stickerCount) {
-            stickerCount.textContent = allStickerData.length.toString();
+            stickerCount.textContent = loadedCount.toString();
         }
         
         const arStatus = document.getElementById("arStatus");
         if (arStatus && !arStatus.textContent.includes("Place")) {
-            arStatus.textContent = `Loaded ${allStickerData.length} stickers! Look around.`;
+            arStatus.textContent = `Found ${loadedCount} stickers nearby! Look around.`;
+        }
+        
+        console.log(`🎉 Successfully loaded ${loadedCount} nearby stickers`);
+        
+        // DEBUG: Log positions and distances
+        if (camera && loadedCount > 0 && userGPS) {
+            console.log("🎯 Your position:", userGPS.lat, userGPS.lon);
+            stickerMeshes.forEach(({ mesh, data }, id) => {
+                const distance = calculateDistance(userGPS.lat, userGPS.lon, data.lat, data.lon);
+                console.log(`📍 Sticker ${id} at ${distance.toFixed(1)}m - World:`, mesh.position);
+            });
         }
         
     } catch (error) {
@@ -456,6 +574,7 @@ async function placeSticker() {
             createdAt: Date.now()
         };
         
+        console.log("📤 Saving sticker to Firebase...");
         await stickersRef.push(stickerData);
         
         if (arStatus) arStatus.textContent = "✅ Sticker placed!";
@@ -473,6 +592,8 @@ async function placeSticker() {
         }
         
         pendingStickerImage = null;
+        
+        console.log("✅ Sticker placed successfully");
         
     } catch (error) {
         console.error("❌ Failed to place sticker:", error);
@@ -516,6 +637,14 @@ function initializeMap() {
                 .addTo(leafletMap)
                 .bindPopup('You are here')
                 .openPopup();
+            
+            // Add circle showing 100m radius
+            L.circle([userGPS.lat, userGPS.lon], {
+                color: 'blue',
+                fillColor: '#30f',
+                fillOpacity: 0.1,
+                radius: MAX_STICKER_DISTANCE
+            }).addTo(leafletMap).bindPopup('100m visibility radius');
         }
         
         // Add sticker markers
@@ -537,17 +666,23 @@ function updateMapMarkers() {
     // Add markers for stickers
     allStickerData.forEach(sticker => {
         if (sticker.lat && sticker.lon) {
+            const distance = userGPS ? calculateDistance(userGPS.lat, userGPS.lon, sticker.lat, sticker.lon) : 0;
+            const isNearby = distance <= MAX_STICKER_DISTANCE;
+            
             const marker = L.marker([sticker.lat, sticker.lon]).addTo(leafletMap);
             
+            let popupContent = `<div style="text-align: center;">`;
             if (sticker.image) {
-                marker.bindPopup(`
-                    <div style="text-align: center;">
-                        <img src="${sticker.image}" style="width: 100px; height: 100px; object-fit: contain; border-radius: 10px;"/>
-                        <p style="margin-top: 8px; font-size: 12px;">Sticker placed here</p>
-                    </div>
-                `);
+                popupContent += `<img src="${sticker.image}" style="width: 100px; height: 100px; object-fit: contain; border-radius: 10px;"/>`;
             }
+            if (userGPS) {
+                popupContent += `<p style="margin-top: 8px; font-size: 12px; color: ${isNearby ? 'green' : 'red'};">`;
+                popupContent += `${Math.round(distance)}m away ${isNearby ? '✅ Visible in AR' : '❌ Too far'}`;
+                popupContent += `</p>`;
+            }
+            popupContent += `</div>`;
             
+            marker.bindPopup(popupContent);
             mapMarkers.push(marker);
         }
     });
@@ -627,24 +762,33 @@ function setupFirebaseListeners() {
         
         if (stickerData.image && stickerData.lat && stickerData.lon) {
             try {
-                const mesh = await createStickerMesh(stickerData.image, 2.0);
-                const worldPos = gpsToWorldPosition(stickerData.lat, stickerData.lon);
-                
-                mesh.position.set(worldPos.x, 0.1, worldPos.z);
-                if (scene) scene.add(mesh);
-                
-                stickerMeshes.set(stickerId, { mesh, data: stickerData });
-                allStickerData.push({ id: stickerId, ...stickerData });
-                
-                // Update UI
-                const stickerCount = document.getElementById("stickerCount");
-                if (stickerCount) {
-                    stickerCount.textContent = allStickerData.length.toString();
+                // Check if sticker is nearby before creating mesh
+                let shouldCreate = true;
+                if (userGPS) {
+                    const distance = calculateDistance(
+                        userGPS.lat, userGPS.lon,
+                        stickerData.lat, stickerData.lon
+                    );
+                    shouldCreate = distance <= MAX_STICKER_DISTANCE;
+                    console.log(`🆕 New sticker ${distance.toFixed(1)}m away - ${shouldCreate ? 'Creating' : 'Skipping (too far)'}`);
                 }
                 
-                updateMapMarkers();
-                
-                console.log("🆕 New sticker added in real-time:", stickerId);
+                if (shouldCreate) {
+                    const mesh = await createStickerMesh(stickerData.image, 3.0);
+                    const worldPos = gpsToWorldPosition(stickerData.lat, stickerData.lon);
+                    
+                    mesh.position.set(worldPos.x, 1.5, worldPos.z);
+                    if (scene) scene.add(mesh);
+                    
+                    stickerMeshes.set(stickerId, { mesh, data: stickerData });
+                    allStickerData.push({ id: stickerId, ...stickerData });
+                    
+                    // Update UI
+                    const nearbyCount = updateStickerVisibility();
+                    updateMapMarkers();
+                    
+                    console.log("🆕 New sticker added in real-time:", stickerId);
+                }
             } catch (error) {
                 console.error("❌ Failed to load new sticker:", error);
             }
@@ -666,11 +810,7 @@ function setupFirebaseListeners() {
         allStickerData = allStickerData.filter(sticker => sticker.id !== stickerId);
         
         // Update UI
-        const stickerCount = document.getElementById("stickerCount");
-        if (stickerCount) {
-            stickerCount.textContent = allStickerData.length.toString();
-        }
-        
+        updateStickerVisibility();
         updateMapMarkers();
         
         console.log("🗑️ Sticker removed:", stickerId);

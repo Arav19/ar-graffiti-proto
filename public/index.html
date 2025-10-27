@@ -141,22 +141,25 @@
     #arPage {
       padding: 0;
       background: transparent;
+      position: relative;
     }
 
-    #arPage video, #arPage canvas {
+    #arPage video {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
-    }
-
-    #arPage video {
-      z-index: 0;
+      z-index: 1; /* Camera feed in background */
     }
 
     #arPage canvas {
-      z-index: 1;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2; /* Stickers on top of camera */
+      pointer-events: none; /* Allow clicks to pass through to video */
     }
 
     .ar-ui {
@@ -164,7 +167,7 @@
       bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
       left: 50%;
       transform: translateX(-50%);
-      z-index: 10;
+      z-index: 10; /* UI on top of everything */
       display: flex;
       gap: 12px;
       padding: 15px 20px;
@@ -178,7 +181,7 @@
       top: calc(env(safe-area-inset-top, 20px) + 20px);
       left: 50%;
       transform: translateX(-50%);
-      z-index: 10;
+      z-index: 10; /* UI on top of everything */
       padding: 12px 20px;
       background: rgba(0, 0, 0, 0.7);
       border-radius: 12px;
@@ -192,7 +195,7 @@
       position: fixed;
       top: calc(env(safe-area-inset-top, 20px) + 70px);
       right: 20px;
-      z-index: 10;
+      z-index: 10; /* UI on top of everything */
       padding: 10px 15px;
       background: rgba(0, 0, 0, 0.6);
       border-radius: 10px;
