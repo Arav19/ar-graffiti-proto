@@ -208,9 +208,6 @@ scene.add(light);
 // Store sticker meshes: stickerId -> { mesh, data, worldPos }
 const stickerMeshes = new Map();
 
-// GPS origin point (first user GPS becomes origin)
-let gpsOrigin = null;
-
 /* ===== CREATE STICKER MESH ===== */
 function createStickerMesh(base64Image, sizeMeters = 1.2) {
   const texture = new THREE.TextureLoader().load(base64Image);
@@ -299,21 +296,17 @@ function stopOrientationTracking() {
 function updateCameraPosition() {
   if (!userGPS) return;
   
-  // Set GPS origin on first position
-  if (!gpsOrigin) {
-    gpsOrigin = { lat: userGPS.lat, lon: userGPS.lon };
-    console.log("GPS origin set:", gpsOrigin);
-  }
-  
-  // Convert user GPS to local position relative to origin
-  const localPos = gpsToMeters(userGPS.lat, userGPS.lon, gpsOrigin.lat, gpsOrigin.lon);
-  camera.position.x = localPos.x;
-  camera.position.z = localPos.z;
+  // Convert user GPS to ABSOLUTE world position (using fixed world origin)
+  const worldPos = gpsToWorldMeters(userGPS.lat, userGPS.lon);
+  camera.position.x = worldPos.x;
+  camera.position.z = worldPos.z;
   camera.position.y = 1.6;
+  
+  console.log(`Camera at world: (${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)}) GPS: (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)})`);
 }
 
 function updateStickerPositions() {
-  if (!userGPS || !gpsOrigin) return;
+  if (!userGPS) return;
   
   let nearbyCount = 0;
   
@@ -324,14 +317,15 @@ function updateStickerPositions() {
       return;
     }
     
-    // Convert sticker GPS to local position relative to origin
-    const stickerLocal = gpsToMeters(data.lat, data.lon, gpsOrigin.lat, gpsOrigin.lon);
+    // Convert sticker GPS to ABSOLUTE world position (using same fixed origin)
+    const stickerWorld = gpsToWorldMeters(data.lat, data.lon);
     
-    mesh.position.x = stickerLocal.x;
-    mesh.position.z = stickerLocal.z;
+    // Set mesh at ABSOLUTE world position (never changes)
+    mesh.position.x = stickerWorld.x;
+    mesh.position.z = stickerWorld.z;
     mesh.position.y = 0.02;
     
-    // Calculate distance from camera
+    // Calculate distance from camera to sticker
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
@@ -355,12 +349,19 @@ onChildAdded(stickersRef, (snap) => {
   if (!data.image || !data.lat || !data.lon) return;
   
   const mesh = createStickerMesh(data.image, 1.2);
+  
+  // Set mesh at ABSOLUTE world position
+  const worldPos = gpsToWorldMeters(data.lat, data.lon);
+  mesh.position.x = worldPos.x;
+  mesh.position.z = worldPos.z;
+  mesh.position.y = 0.02;
+  
   scene.add(mesh);
   
   stickerMeshes.set(id, { mesh, data });
   allStickerData.push({ id, ...data });
   
-  console.log(`Sticker ${id} loaded at GPS (${data.lat.toFixed(6)}, ${data.lon.toFixed(6)})`);
+  console.log(`Sticker ${id} loaded at GPS (${data.lat.toFixed(6)}, ${data.lon.toFixed(6)}) -> World (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
   
   updateStickerPositions();
   updateMapMarkers();
