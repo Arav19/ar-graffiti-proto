@@ -1,124 +1,110 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SurfaceLess AR Stickers</title>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SurfaceLess AR Stickers</title>
+  <style>
+    html, body {
+      margin:0;
+      padding:0;
+      height:100%;
+      width:100%;
+      background:#000;
+      color:#fff;
+      font-family: Arial, sans-serif;
+      overflow:hidden;
+    }
+    #status {
+      position: fixed;
+      top: 10px;
+      left:50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      padding: 8px 16px;
+      border-radius:4px;
+      z-index: 1000;
+    }
+    #drawSection, #arSection {
+      position:absolute;
+      top:0; left:0;
+      width:100%; height:100%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+    #drawSection.active, #arSection.active {
+      display: flex;
+    }
+    #drawCanvas {
+      border:2px solid #fff;
+      border-radius:8px;
+      background:#222;
+      touch-action: none;
+    }
+    button {
+      padding:10px 20px;
+      margin:10px;
+      background: rgba(255,255,255,0.1);
+      border:1px solid #fff;
+      color:#fff;
+      border-radius:6px;
+      font-size:16px;
+      cursor:pointer;
+    }
+    button:hover {
+      background: rgba(255,255,255,0.3);
+    }
+    #uiOverlay {
+      position: fixed;
+      top:0; left:0;
+      width:100%; height:100%;
+      pointer-events: none;
+      z-index: 1000;
+    }
+    #uiOverlay button {
+      pointer-events: auto;
+    }
+    #placeBtn {
+      position:absolute;
+      bottom: 30px;
+      left:50%;
+      transform: translateX(-50%);
+      display:none;
+      background: rgba(0,0,0,0.7);
+      border:1px solid #fff;
+      padding:12px 24px;
+      font-size:18px;
+    }
+    video#cameraFeed {
+      position:absolute;
+      top:0; left:0;
+      width:100%; height:100%;
+      object-fit:cover;
+      z-index: -1;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">Loading…</div>
 
-    <style>
-      html,
-      body {
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background: #000;
-        color: #fff;
-        font-family: sans-serif;
-      }
-
-      canvas {
-        touch-action: none;
-      }
-
-      #drawSection,
-      #arSection {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        display: none;
-        justify-content: center;
-        align-items: center;
-        flex-direction: column;
-      }
-
-      #drawSection {
-        background: #111;
-      }
-
-      #drawCanvas {
-        border: 2px solid #fff;
-        border-radius: 8px;
-        background: #222;
-        touch-action: none;
-      }
-
-      button {
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid #fff;
-        color: #fff;
-        padding: 10px 20px;
-        margin: 10px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 16px;
-      }
-
-      button:hover {
-        background: rgba(255, 255, 255, 0.3);
-      }
-
-      #uiOverlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: 9999;
-      }
-
-      #uiOverlay button {
-        pointer-events: auto;
-      }
-
-      #placeBtn {
-        position: absolute;
-        bottom: 30px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.6);
-        color: white;
-        padding: 12px 24px;
-        border-radius: 8px;
-        font-size: 16px;
-        border: 1px solid #fff;
-        display: none;
-      }
-
-      #status {
-        position: fixed;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.6);
-        padding: 10px 20px;
-        border-radius: 8px;
-        z-index: 9999;
-      }
-    </style>
-  </head>
-
-  <body>
-    <div id="status">Loading...</div>
-
-    <!-- Draw Mode -->
-    <div id="drawSection">
-      <canvas id="drawCanvas" width="300" height="300"></canvas>
-      <div>
-        <button id="clearBtn">Clear</button>
-        <button id="saveBtn">Save & Place Sticker</button>
-      </div>
+  <div id="drawSection" class="active">
+    <canvas id="drawCanvas" width="320" height="320"></canvas>
+    <div>
+      <button id="clearBtn">Clear</button>
+      <button id="saveBtn">Save & Place Sticker</button>
     </div>
+  </div>
 
-    <!-- AR Mode -->
-    <div id="arSection" style="display: none;">
-      <div id="uiOverlay">
-        <button id="placeBtn">Place Sticker</button>
-      </div>
+  <div id="arSection">
+    <div id="uiOverlay">
+      <button id="placeBtn">Place Sticker</button>
     </div>
+    <video id="cameraFeed" autoplay playsinline></video>
+    <!-- The THREE renderer canvas will be appended dynamically -->
+  </div>
 
-    <script type="module" src="./main.js"></script>
-  </body>
+  <script type="module" src="./main.js"></script>
+</body>
 </html>
