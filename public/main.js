@@ -62,6 +62,7 @@ let pendingStickerImage = null;
 let leafletMap = null;
 let mapMarkers = [];
 let allStickerData = [];
+let isPlacingSticker = false;
 
 // ===== THREE.JS VARIABLES =====
 let renderer, scene, camera;
@@ -227,25 +228,34 @@ function initThreeJS() {
 
 // ===== STICKER CREATION =====
 function createStickerMesh(base64Image, sizeMeters = 1.0) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const textureLoader = new THREE.TextureLoader();
-    textureLoader.load(base64Image, (texture) => {
-      const geometry = new THREE.PlaneGeometry(sizeMeters, sizeMeters);
-      const material = new THREE.MeshBasicMaterial({
-        map: texture,
-        transparent: true,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        opacity: 0.9
-      });
-      
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.rotation.x = 0;
-      mesh.position.y = 0.5;
-      mesh.matrixAutoUpdate = false;
-      
-      resolve(mesh);
-    });
+    textureLoader.load(
+      base64Image,
+      (texture) => {
+        const geometry = new THREE.PlaneGeometry(sizeMeters, sizeMeters);
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          opacity: 0.9
+        });
+        
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.rotation.x = 0;
+        mesh.position.y = 0.5;
+        mesh.matrixAutoUpdate = false;
+        
+        console.log("Sticker mesh created successfully");
+        resolve(mesh);
+      },
+      undefined,
+      (error) => {
+        console.error("Error loading sticker texture:", error);
+        reject(error);
+      }
+    );
   });
 }
 
@@ -383,11 +393,14 @@ function stopCamera() {
 
 // ===== AR MODE FUNCTIONS =====
 async function enterARMode(placingSticker = false) {
-  console.log("Entering AR mode...");
+  console.log("Entering AR mode... placingSticker:", placingSticker);
   const arStatus = document.getElementById("arStatus");
   if (arStatus) {
     arStatus.textContent = "Starting camera...";
   }
+
+  // Set placing mode
+  isPlacingSticker = placingSticker;
 
   // Initialize Three.js if not already done
   if (!renderer) {
@@ -436,13 +449,16 @@ async function enterARMode(placingSticker = false) {
   startGPSWatch();
   startRendering();
 
+  // Show/hide place sticker button
   const placeStickerBtn = document.getElementById("placeStickerBtn");
-  if (placingSticker && pendingStickerImage && placeStickerBtn) {
-    placeStickerBtn.style.display = "";
-    if (arStatus) arStatus.textContent = "Ready to place sticker! Look around and tap Place when ready.";
-  } else {
-    if (placeStickerBtn) placeStickerBtn.style.display = "none";
-    if (arStatus) arStatus.textContent = "AR mode active. Look around to see stickers!";
+  if (placeStickerBtn) {
+    if (isPlacingSticker && pendingStickerImage) {
+      placeStickerBtn.style.display = "";
+      if (arStatus) arStatus.textContent = "Ready to place sticker! Look around and tap Place when ready.";
+    } else {
+      placeStickerBtn.style.display = "none";
+      if (arStatus) arStatus.textContent = "AR mode active. Look around to see stickers!";
+    }
   }
 
   // Load existing stickers
@@ -461,6 +477,7 @@ function exitARMode() {
   
   // Clear pending sticker
   pendingStickerImage = null;
+  isPlacingSticker = false;
   
   // Return to home
   showPage("home");
@@ -474,37 +491,52 @@ async function loadStickers() {
   }
   
   try {
+    console.log("Loading stickers from Firebase...");
     const snapshot = await stickersRef.once('value');
     const data = snapshot.val();
     
     if (data) {
+      console.log("Found stickers data:", data);
       allStickerData = Object.entries(data).map(([id, val]) => ({ id, ...val }));
       
       // Create meshes for each sticker
       for (const sticker of allStickerData) {
         if (sticker.image && sticker.lat && sticker.lon && !stickerMeshes.has(sticker.id)) {
-          const mesh = await createStickerMesh(sticker.image, 1.0);
-          const worldPos = gpsToAbsoluteWorldPosition(sticker.lat, sticker.lon);
-          
-          mesh.position.x = worldPos.x;
-          mesh.position.z = worldPos.z;
-          mesh.position.y = 0.5;
-          mesh.updateMatrix();
-          
-          scene.add(mesh);
-          stickerMeshes.set(sticker.id, { mesh, data: sticker });
-          
-          console.log(`Loaded sticker at world position: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+          console.log("Creating sticker mesh for:", sticker.id);
+          try {
+            const mesh = await createStickerMesh(sticker.image, 1.0);
+            const worldPos = gpsToAbsoluteWorldPosition(sticker.lat, sticker.lon);
+            
+            mesh.position.x = worldPos.x;
+            mesh.position.z = worldPos.z;
+            mesh.position.y = 0.5;
+            mesh.updateMatrix();
+            
+            scene.add(mesh);
+            stickerMeshes.set(sticker.id, { mesh, data: sticker });
+            
+            console.log(`✅ Loaded sticker at world position: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+          } catch (error) {
+            console.error(`Failed to create sticker mesh for ${sticker.id}:`, error);
+          }
         }
       }
       
       const stickerCount = document.getElementById("stickerCount");
       const arStatus = document.getElementById("arStatus");
       if (stickerCount) stickerCount.textContent = allStickerData.length;
-      if (arStatus) arStatus.textContent = `Loaded ${allStickerData.length} stickers!`;
+      if (arStatus) arStatus.textContent = `Loaded ${allStickerData.length} stickers! Look around to see them.`;
+      
+      console.log(`✅ Total stickers loaded: ${allStickerData.length}`);
+    } else {
+      console.log("No stickers found in database");
+      const arStatus = document.getElementById("arStatus");
+      if (arStatus) arStatus.textContent = "No stickers found. Be the first to place one!";
     }
   } catch (error) {
     console.error("Error loading stickers:", error);
+    const arStatus = document.getElementById("arStatus");
+    if (arStatus) arStatus.textContent = "Error loading stickers";
   }
 }
 
@@ -530,6 +562,7 @@ async function placeSticker() {
       createdAt: Date.now()
     };
     
+    console.log("Placing sticker at:", userGPS.lat, userGPS.lon);
     await stickersRef.push(stickerData);
     
     const arStatus = document.getElementById("arStatus");
@@ -537,6 +570,7 @@ async function placeSticker() {
     if (arStatus) arStatus.textContent = "Sticker placed successfully!";
     if (placeStickerBtn) placeStickerBtn.style.display = "none";
     pendingStickerImage = null;
+    isPlacingSticker = false;
     
     // Clear drawing
     const drawCanvas = document.getElementById("drawCanvas");
@@ -656,7 +690,8 @@ function setupEventListeners() {
       const drawCanvas = document.getElementById("drawCanvas");
       if (drawCanvas) {
         pendingStickerImage = drawCanvas.toDataURL("image/png");
-        showPage("ar");
+        console.log("Sticker image saved, entering AR placement mode");
+        enterARMode(true); // This should show the place sticker button
       }
     });
   }
@@ -720,6 +755,7 @@ if (stickersRef) {
     if (!data.image || !data.lat || !data.lon) return;
     
     try {
+      console.log("New sticker added to Firebase, creating mesh...");
       const mesh = await createStickerMesh(data.image, 1.0);
       const worldPos = gpsToAbsoluteWorldPosition(data.lat, data.lon);
       
@@ -732,9 +768,13 @@ if (stickersRef) {
       stickerMeshes.set(id, { mesh, data });
       allStickerData.push({ id, ...data });
       
-      console.log(`New sticker placed at world position: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+      console.log(`✅ New sticker placed at world position: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
       
       updateMapMarkers();
+      
+      // Update sticker count
+      const stickerCount = document.getElementById("stickerCount");
+      if (stickerCount) stickerCount.textContent = allStickerData.length;
     } catch (error) {
       console.error("Failed to create sticker mesh:", error);
     }
@@ -754,6 +794,10 @@ if (stickersRef) {
     
     allStickerData = allStickerData.filter(s => s.id !== id);
     updateMapMarkers();
+    
+    // Update sticker count
+    const stickerCount = document.getElementById("stickerCount");
+    if (stickerCount) stickerCount.textContent = allStickerData.length;
   });
 }
 
@@ -770,6 +814,7 @@ function initApp() {
   console.log("- Create Sticker → Draw page");
   console.log("- Explore Stickers → AR mode");
   console.log("- View Map → Map page");
+  console.log("- Save & Place → Creates sticker and enters AR placement mode");
 }
 
 // Start the app when the page loads
