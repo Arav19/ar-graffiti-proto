@@ -1,57 +1,124 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>SurfaceLess — AR Stickers</title>
-  <style>
-    html,body { margin:0; height:100%; background:#000; color:#fff; font-family:Inter, Arial, sans-serif; -webkit-user-select:none; user-select:none; }
-    #app { position:relative; width:100%; height:100%; overflow:hidden; }
-    /* video background (fallback) */
-    video#fallbackVideo { position: absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:0; background:#000; display:none; }
-    canvas#three-canvas { position:absolute; inset:0; width:100%; height:100%; z-index:1; touch-action:none; display:block; }
-    /* UI */
-    #uiTop { position:fixed; left:12px; top:12px; z-index:10; display:flex; gap:8px; align-items:center; }
-    .btn { padding:8px 12px; border-radius:8px; border:none; background: rgba(255,255,255,0.08); color:#fff; cursor:pointer }
-    .btn.primary { background: rgba(0,200,140,0.15); color:#00ffd0; }
-    #status { margin-left:8px; font-size:13px; opacity:0.95; }
-    /* draw UI */
-    #drawPanel { position:fixed; right:12px; top:12px; z-index:11; background: rgba(0,0,0,0.6); padding:8px; border-radius:8px; }
-    canvas#drawCanvas { background:#111; border:1px solid rgba(255,255,255,0.06); width:270px; height:270px; touch-action:none; }
-    input[type=color] { width:42px; height:42px; border-radius:8px; border:none; padding:0; }
-    input[type=range] { width:110px; }
-    /* small helper */
-    #help { position:fixed; left:12px; bottom:12px; z-index:10; color:#ccc; font-size:13px; background: rgba(0,0,0,0.45); padding:6px 10px; border-radius:8px; }
-  </style>
-</head>
-<body>
-  <div id="app">
-    <video id="fallbackVideo" autoplay playsinline muted></video>
-    <canvas id="three-canvas"></canvas>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SurfaceLess AR Stickers</title>
 
-    <div id="uiTop">
-      <button id="enterArBtn" class="btn primary">Enter AR</button>
-      <button id="placeBtn" class="btn" style="display:none">Place Sticker (GPS)</button>
-      <button id="exitArBtn" class="btn" style="display:none">Exit AR</button>
-      <button id="clearAllBtn" class="btn" title="Clear all (DB)">Clear All</button>
-      <div id="status">Ready — draw a sticker, save, then place</div>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+        color: #fff;
+        font-family: sans-serif;
+      }
+
+      canvas {
+        touch-action: none;
+      }
+
+      #drawSection,
+      #arSection {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: none;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+      }
+
+      #drawSection {
+        background: #111;
+      }
+
+      #drawCanvas {
+        border: 2px solid #fff;
+        border-radius: 8px;
+        background: #222;
+        touch-action: none;
+      }
+
+      button {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid #fff;
+        color: #fff;
+        padding: 10px 20px;
+        margin: 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 16px;
+      }
+
+      button:hover {
+        background: rgba(255, 255, 255, 0.3);
+      }
+
+      #uiOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9999;
+      }
+
+      #uiOverlay button {
+        pointer-events: auto;
+      }
+
+      #placeBtn {
+        position: absolute;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 16px;
+        border: 1px solid #fff;
+        display: none;
+      }
+
+      #status {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.6);
+        padding: 10px 20px;
+        border-radius: 8px;
+        z-index: 9999;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="status">Loading...</div>
+
+    <!-- Draw Mode -->
+    <div id="drawSection">
+      <canvas id="drawCanvas" width="300" height="300"></canvas>
+      <div>
+        <button id="clearBtn">Clear</button>
+        <button id="saveBtn">Save & Place Sticker</button>
+      </div>
     </div>
 
-    <div id="drawPanel">
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-        <button id="clearDrawBtn" class="btn">Clear</button>
-        <button id="saveBtn" class="btn primary">Save & Enter AR</button>
-      </div>
-      <canvas id="drawCanvas" width="512" height="512"></canvas>
-      <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
-        <input id="colorPicker" type="color" value="#00ffd0" />
-        <input id="sizeRange" type="range" min="2" max="60" value="10" />
+    <!-- AR Mode -->
+    <div id="arSection" style="display: none;">
+      <div id="uiOverlay">
+        <button id="placeBtn">Place Sticker</button>
       </div>
     </div>
 
-    <div id="help">Draw a sticker → Save → Enter AR → Place (GPS) or use WebXR hit-test if available.</div>
-  </div>
-
-  <script type="module" src="./main.js"></script>
-</body>
+    <script type="module" src="./main.js"></script>
+  </body>
 </html>
