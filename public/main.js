@@ -512,3 +512,19 @@ async function enterARMode(placingSticker = false) {
 
 function exitARMode() {
   stopCamera();
+  stopGPSWatch();
+  stopRendering();
+  placeStickerBtn.style.display = "none";
+  pendingStickerImage = null;
+}
+
+/* ===== WINDOW RESIZE ===== */
+window.addEventListener("resize", () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+/* ===== INITIALIZATION ===== */
+console.log("AR Stickers app loaded");
+arStatus.textContent = "Ready";
