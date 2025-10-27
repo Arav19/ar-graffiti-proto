@@ -2,30 +2,35 @@
 
 console.log("🚀 AR Stickers App Starting...");
 
-// ===== DOM ELEMENTS =====
-const homePage = document.getElementById("homePage");
-const drawPage = document.getElementById("drawPage");
-const arPage = document.getElementById("arPage");
-const mapPage = document.getElementById("mapPage");
-
-const createStickerBtn = document.getElementById("createStickerBtn");
-const exploreBtn = document.getElementById("exploreBtn");
-const mapBtn = document.getElementById("mapBtn");
-
-const drawCanvas = document.getElementById("drawCanvas");
-const colorPicker = document.getElementById("colorPicker");
-const sizeRange = document.getElementById("sizeRange");
-const clearDrawBtn = document.getElementById("clearDrawBtn");
-const saveStickerBtn = document.getElementById("saveStickerBtn");
-const backToHomeBtn = document.getElementById("backToHomeBtn");
-const backFromMapBtn = document.getElementById("backFromMapBtn");
-
-const arVideo = document.getElementById("arVideo");
-const threeCanvas = document.getElementById("three-canvas");
-const arStatus = document.getElementById("arStatus");
-const stickerCount = document.getElementById("stickerCount");
-const placeStickerBtn = document.getElementById("placeStickerBtn");
-const exitArBtn = document.getElementById("exitArBtn");
+// ===== SIMPLE NAVIGATION SYSTEM =====
+function showPage(pageName) {
+  console.log("Navigating to:", pageName);
+  
+  const homePage = document.getElementById("homePage");
+  const drawPage = document.getElementById("drawPage");
+  const arPage = document.getElementById("arPage");
+  const mapPage = document.getElementById("mapPage");
+  
+  // Hide all pages
+  [homePage, drawPage, arPage, mapPage].forEach(p => {
+    if (p) p.classList.remove("active");
+  });
+  
+  // Show selected page
+  if (pageName === "home" && homePage) {
+    homePage.classList.add("active");
+  } else if (pageName === "draw" && drawPage) {
+    drawPage.classList.add("active");
+  } else if (pageName === "ar" && arPage) {
+    arPage.classList.add("active");
+    // Start AR when showing AR page
+    setTimeout(() => enterARMode(false), 100);
+  } else if (pageName === "map" && mapPage) {
+    mapPage.classList.add("active");
+    // Initialize map when shown
+    setTimeout(() => initMap(), 100);
+  }
+}
 
 // ===== FIREBASE CONFIG =====
 const firebaseConfig = {
@@ -39,9 +44,15 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-const app = firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
-const stickersRef = db.ref("stickers");
+let db, stickersRef;
+try {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.database();
+  stickersRef = db.ref("stickers");
+  console.log("Firebase initialized successfully");
+} catch (error) {
+  console.error("Firebase initialization failed:", error);
+}
 
 // ===== STATE VARIABLES =====
 let userGPS = null;
@@ -56,48 +67,32 @@ let allStickerData = [];
 let renderer, scene, camera;
 const stickerMeshes = new Map();
 
-// ===== PAGE NAVIGATION =====
-function showPage(pageName) {
-  console.log("Navigating to:", pageName);
-  
-  // Hide all pages
-  [homePage, drawPage, arPage, mapPage].forEach(p => {
-    p.classList.remove("active");
-  });
-  
-  // Show selected page
-  if (pageName === "home") {
-    homePage.classList.add("active");
-  } else if (pageName === "draw") {
-    drawPage.classList.add("active");
-  } else if (pageName === "ar") {
-    arPage.classList.add("active");
-    // Start AR when showing AR page
-    setTimeout(() => enterARMode(false), 100);
-  } else if (pageName === "map") {
-    mapPage.classList.add("active");
-    // Initialize map when shown
-    setTimeout(() => initMap(), 100);
-  }
-}
-
 // ===== DRAWING FUNCTIONALITY =====
-const drawCtx = drawCanvas.getContext("2d");
-drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-
-let isDrawing = false;
-
-function getDrawPos(e) {
-  const rect = drawCanvas.getBoundingClientRect();
-  const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
-  const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
-  return {
-    x: x * (drawCanvas.width / rect.width),
-    y: y * (drawCanvas.height / rect.height)
-  };
-}
-
 function setupDrawing() {
+  const drawCanvas = document.getElementById("drawCanvas");
+  const colorPicker = document.getElementById("colorPicker");
+  const sizeRange = document.getElementById("sizeRange");
+  
+  if (!drawCanvas || !colorPicker || !sizeRange) {
+    console.error("Drawing elements not found");
+    return;
+  }
+  
+  const drawCtx = drawCanvas.getContext("2d");
+  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  
+  let isDrawing = false;
+
+  function getDrawPos(e) {
+    const rect = drawCanvas.getBoundingClientRect();
+    const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
+    const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
+    return {
+      x: x * (drawCanvas.width / rect.width),
+      y: y * (drawCanvas.height / rect.height)
+    };
+  }
+
   drawCanvas.addEventListener("pointerdown", (e) => {
     isDrawing = true;
     drawCtx.strokeStyle = colorPicker.value;
@@ -166,7 +161,7 @@ function startGPSWatch() {
       };
       
       // Update camera position if in AR mode
-      if (camera && arPage.classList.contains("active")) {
+      if (camera && document.getElementById("arPage").classList.contains("active")) {
         const worldPos = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
         camera.position.x = worldPos.x;
         camera.position.z = worldPos.z;
@@ -189,34 +184,45 @@ function stopGPSWatch() {
 
 // ===== THREE.JS SETUP =====
 function initThreeJS() {
-  // Create renderer
-  renderer = new THREE.WebGLRenderer({
-    canvas: threeCanvas,
-    antialias: true,
-    alpha: true
-  });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.outputEncoding = THREE.sRGBEncoding;
+  const threeCanvas = document.getElementById("three-canvas");
+  if (!threeCanvas) {
+    console.error("Three.js canvas not found");
+    return false;
+  }
+  
+  try {
+    // Create renderer
+    renderer = new THREE.WebGLRenderer({
+      canvas: threeCanvas,
+      antialias: true,
+      alpha: true
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    // Create scene
+    scene = new THREE.Scene();
+    scene.background = null;
 
-  // Create scene
-  scene = new THREE.Scene();
-  scene.background = null;
+    // Create camera
+    camera = new THREE.PerspectiveCamera(
+      60,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+    camera.position.set(0, 1.6, 0);
 
-  // Create camera
-  camera = new THREE.PerspectiveCamera(
-    60,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    1000
-  );
-  camera.position.set(0, 1.6, 0);
+    // Add light
+    const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+    scene.add(light);
 
-  // Add light
-  const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
-  scene.add(light);
-
-  console.log("Three.js initialized");
+    console.log("Three.js initialized successfully");
+    return true;
+  } catch (error) {
+    console.error("Three.js initialization failed:", error);
+    return false;
+  }
 }
 
 // ===== STICKER CREATION =====
@@ -224,8 +230,6 @@ function createStickerMesh(base64Image, sizeMeters = 1.0) {
   return new Promise((resolve) => {
     const textureLoader = new THREE.TextureLoader();
     textureLoader.load(base64Image, (texture) => {
-      texture.encoding = THREE.sRGBEncoding;
-      
       const geometry = new THREE.PlaneGeometry(sizeMeters, sizeMeters);
       const material = new THREE.MeshBasicMaterial({
         map: texture,
@@ -272,7 +276,7 @@ function updateStickerBillboarding() {
 
 // ===== UPDATE STICKER VISIBILITY =====
 function updateStickerVisibility() {
-  if (!userGPS) return;
+  if (!userGPS || !camera) return;
   
   let nearbyCount = 0;
   
@@ -291,7 +295,10 @@ function updateStickerVisibility() {
     if (isVisible) nearbyCount++;
   });
   
-  stickerCount.textContent = nearbyCount.toString();
+  const stickerCount = document.getElementById("stickerCount");
+  if (stickerCount) {
+    stickerCount.textContent = nearbyCount.toString();
+  }
 }
 
 // ===== RENDER LOOP =====
@@ -307,7 +314,9 @@ function startRendering() {
     
     updateStickerVisibility();
     updateStickerBillboarding();
-    renderer.render(scene, camera);
+    if (renderer && scene && camera) {
+      renderer.render(scene, camera);
+    }
   }
   
   animate();
@@ -329,19 +338,34 @@ async function startCamera() {
     cameraStream = await navigator.mediaDevices.getUserMedia({
       video: { 
         facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       },
       audio: false
     });
     
+    const arVideo = document.getElementById("arVideo");
     arVideo.srcObject = cameraStream;
-    await arVideo.play();
     
-    return true;
+    // Wait for video to be ready
+    return new Promise((resolve) => {
+      arVideo.onloadedmetadata = () => {
+        arVideo.play().then(() => {
+          console.log("Camera started successfully");
+          resolve(true);
+        }).catch(err => {
+          console.error("Video play failed:", err);
+          resolve(false);
+        });
+      };
+    });
+    
   } catch (e) {
     console.error("Camera error:", e);
-    arStatus.textContent = "Camera permission required";
+    const arStatus = document.getElementById("arStatus");
+    if (arStatus) {
+      arStatus.textContent = "Camera permission required";
+    }
     return false;
   }
 }
@@ -351,26 +375,38 @@ function stopCamera() {
     cameraStream.getTracks().forEach(t => t.stop());
     cameraStream = null;
   }
-  arVideo.srcObject = null;
+  const arVideo = document.getElementById("arVideo");
+  if (arVideo) {
+    arVideo.srcObject = null;
+  }
 }
 
 // ===== AR MODE FUNCTIONS =====
 async function enterARMode(placingSticker = false) {
   console.log("Entering AR mode...");
-  arStatus.textContent = "Starting camera...";
+  const arStatus = document.getElementById("arStatus");
+  if (arStatus) {
+    arStatus.textContent = "Starting camera...";
+  }
 
   // Initialize Three.js if not already done
   if (!renderer) {
-    initThreeJS();
+    if (!initThreeJS()) {
+      if (arStatus) arStatus.textContent = "3D engine failed to start";
+      return;
+    }
   }
 
   // Start camera
   const cameraOk = await startCamera();
-  if (!cameraOk) return;
+  if (!cameraOk) {
+    if (arStatus) arStatus.textContent = "Camera failed to start";
+    return;
+  }
 
   // Get GPS
   try {
-    arStatus.textContent = "Getting GPS...";
+    if (arStatus) arStatus.textContent = "Getting GPS...";
     const coords = await getCurrentGPS();
     userGPS = {
       lat: coords.latitude,
@@ -385,12 +421,14 @@ async function enterARMode(placingSticker = false) {
     camera.position.z = worldPos.z;
     camera.position.y = 1.6;
 
-    arStatus.textContent = `GPS locked! Position: ${userGPS.lat.toFixed(4)}, ${userGPS.lon.toFixed(4)}`;
+    if (arStatus) {
+      arStatus.textContent = `GPS locked! Position: ${userGPS.lat.toFixed(4)}, ${userGPS.lon.toFixed(4)}`;
+    }
     console.log("Camera positioned at world coordinates:", worldPos);
 
   } catch (e) {
     console.error("GPS error:", e);
-    arStatus.textContent = "GPS required for AR";
+    if (arStatus) arStatus.textContent = "GPS required for AR";
     return;
   }
 
@@ -398,13 +436,13 @@ async function enterARMode(placingSticker = false) {
   startGPSWatch();
   startRendering();
 
-  // Show place sticker button if needed
-  if (placingSticker && pendingStickerImage) {
+  const placeStickerBtn = document.getElementById("placeStickerBtn");
+  if (placingSticker && pendingStickerImage && placeStickerBtn) {
     placeStickerBtn.style.display = "";
-    arStatus.textContent = "Ready to place sticker! Look around and tap Place when ready.";
+    if (arStatus) arStatus.textContent = "Ready to place sticker! Look around and tap Place when ready.";
   } else {
-    placeStickerBtn.style.display = "none";
-    arStatus.textContent = "AR mode active. Look around to see stickers!";
+    if (placeStickerBtn) placeStickerBtn.style.display = "none";
+    if (arStatus) arStatus.textContent = "AR mode active. Look around to see stickers!";
   }
 
   // Load existing stickers
@@ -430,8 +468,13 @@ function exitARMode() {
 
 // ===== STICKER MANAGEMENT =====
 async function loadStickers() {
+  if (!stickersRef) {
+    console.error("Firebase not initialized");
+    return;
+  }
+  
   try {
-    const snapshot = await stickersRef.get();
+    const snapshot = await stickersRef.once('value');
     const data = snapshot.val();
     
     if (data) {
@@ -455,8 +498,10 @@ async function loadStickers() {
         }
       }
       
-      stickerCount.textContent = allStickerData.length;
-      arStatus.textContent = `Loaded ${allStickerData.length} stickers!`;
+      const stickerCount = document.getElementById("stickerCount");
+      const arStatus = document.getElementById("arStatus");
+      if (stickerCount) stickerCount.textContent = allStickerData.length;
+      if (arStatus) arStatus.textContent = `Loaded ${allStickerData.length} stickers!`;
     }
   } catch (error) {
     console.error("Error loading stickers:", error);
@@ -466,6 +511,11 @@ async function loadStickers() {
 async function placeSticker() {
   if (!pendingStickerImage || !userGPS) {
     alert("No sticker image or GPS available");
+    return;
+  }
+
+  if (!stickersRef) {
+    alert("Database not available");
     return;
   }
 
@@ -482,16 +532,23 @@ async function placeSticker() {
     
     await stickersRef.push(stickerData);
     
-    arStatus.textContent = "Sticker placed successfully!";
-    placeStickerBtn.style.display = "none";
+    const arStatus = document.getElementById("arStatus");
+    const placeStickerBtn = document.getElementById("placeStickerBtn");
+    if (arStatus) arStatus.textContent = "Sticker placed successfully!";
+    if (placeStickerBtn) placeStickerBtn.style.display = "none";
     pendingStickerImage = null;
     
     // Clear drawing
-    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    const drawCanvas = document.getElementById("drawCanvas");
+    if (drawCanvas) {
+      const drawCtx = drawCanvas.getContext("2d");
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    }
     
   } catch (error) {
     console.error("Error placing sticker:", error);
-    arStatus.textContent = "Failed to place sticker";
+    const arStatus = document.getElementById("arStatus");
+    if (arStatus) arStatus.textContent = "Failed to place sticker";
   }
 }
 
@@ -507,6 +564,12 @@ function getUniqueUserId() {
 // ===== MAP FUNCTIONALITY =====
 function initMap() {
   console.log("Initializing map...");
+  const mapElement = document.getElementById('map');
+  if (!mapElement) {
+    console.error("Map element not found");
+    return;
+  }
+  
   try {
     // Create map centered on user location or default
     const center = userGPS ? [userGPS.lat, userGPS.lon] : [40.7589, -73.9851];
@@ -556,48 +619,91 @@ function updateMapMarkers() {
 
 // ===== BUTTON EVENT LISTENERS =====
 function setupEventListeners() {
-  createStickerBtn.addEventListener("click", () => {
-    showPage("draw");
-  });
+  const createStickerBtn = document.getElementById("createStickerBtn");
+  const exploreBtn = document.getElementById("exploreBtn");
+  const mapBtn = document.getElementById("mapBtn");
+  const saveStickerBtn = document.getElementById("saveStickerBtn");
+  const placeStickerBtn = document.getElementById("placeStickerBtn");
+  const exitArBtn = document.getElementById("exitArBtn");
+  const backToHomeBtn = document.getElementById("backToHomeBtn");
+  const backFromMapBtn = document.getElementById("backFromMapBtn");
+  const clearDrawBtn = document.getElementById("clearDrawBtn");
 
-  exploreBtn.addEventListener("click", () => {
-    showPage("ar");
-  });
+  if (createStickerBtn) {
+    createStickerBtn.addEventListener("click", () => {
+      console.log("Create Sticker clicked");
+      showPage("draw");
+    });
+  }
 
-  mapBtn.addEventListener("click", () => {
-    showPage("map");
-  });
+  if (exploreBtn) {
+    exploreBtn.addEventListener("click", () => {
+      console.log("Explore clicked");
+      showPage("ar");
+    });
+  }
 
-  saveStickerBtn.addEventListener("click", () => {
-    // Save drawing and prepare for AR placement
-    pendingStickerImage = drawCanvas.toDataURL("image/png");
-    showPage("ar");
-  });
+  if (mapBtn) {
+    mapBtn.addEventListener("click", () => {
+      console.log("Map clicked");
+      showPage("map");
+    });
+  }
 
-  placeStickerBtn.addEventListener("click", () => {
-    placeSticker();
-  });
+  if (saveStickerBtn) {
+    saveStickerBtn.addEventListener("click", () => {
+      console.log("Save Sticker clicked");
+      const drawCanvas = document.getElementById("drawCanvas");
+      if (drawCanvas) {
+        pendingStickerImage = drawCanvas.toDataURL("image/png");
+        showPage("ar");
+      }
+    });
+  }
 
-  exitArBtn.addEventListener("click", () => {
-    exitARMode();
-  });
+  if (placeStickerBtn) {
+    placeStickerBtn.addEventListener("click", () => {
+      console.log("Place Sticker clicked");
+      placeSticker();
+    });
+  }
 
-  backToHomeBtn.addEventListener("click", () => {
-    showPage("home");
-  });
+  if (exitArBtn) {
+    exitArBtn.addEventListener("click", () => {
+      console.log("Exit AR clicked");
+      exitARMode();
+    });
+  }
 
-  backFromMapBtn.addEventListener("click", () => {
-    showPage("home");
-  });
+  if (backToHomeBtn) {
+    backToHomeBtn.addEventListener("click", () => {
+      console.log("Back to Home clicked");
+      showPage("home");
+    });
+  }
 
-  clearDrawBtn.addEventListener("click", () => {
-    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-  });
+  if (backFromMapBtn) {
+    backFromMapBtn.addEventListener("click", () => {
+      console.log("Back from Map clicked");
+      showPage("home");
+    });
+  }
+
+  if (clearDrawBtn) {
+    clearDrawBtn.addEventListener("click", () => {
+      console.log("Clear drawing");
+      const drawCanvas = document.getElementById("drawCanvas");
+      if (drawCanvas) {
+        const drawCtx = drawCanvas.getContext("2d");
+        drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      }
+    });
+  }
 }
 
 // ===== WINDOW RESIZE HANDLER =====
 window.addEventListener("resize", () => {
-  if (renderer) {
+  if (renderer && camera) {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -605,49 +711,51 @@ window.addEventListener("resize", () => {
 });
 
 // ===== FIREBASE LISTENERS =====
-stickersRef.on('child_added', async (snap) => {
-  const id = snap.key;
-  const data = snap.val();
-  
-  if (stickerMeshes.has(id)) return;
-  if (!data.image || !data.lat || !data.lon) return;
-  
-  try {
-    const mesh = await createStickerMesh(data.image, 1.0);
-    const worldPos = gpsToAbsoluteWorldPosition(data.lat, data.lon);
+if (stickersRef) {
+  stickersRef.on('child_added', async (snap) => {
+    const id = snap.key;
+    const data = snap.val();
     
-    mesh.position.x = worldPos.x;
-    mesh.position.z = worldPos.z;
-    mesh.position.y = 0.5;
-    mesh.updateMatrix();
+    if (stickerMeshes.has(id)) return;
+    if (!data.image || !data.lat || !data.lon) return;
     
-    scene.add(mesh);
-    stickerMeshes.set(id, { mesh, data });
-    allStickerData.push({ id, ...data });
-    
-    console.log(`New sticker placed at world position: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
-    
-    updateMapMarkers();
-  } catch (error) {
-    console.error("Failed to create sticker mesh:", error);
-  }
-});
+    try {
+      const mesh = await createStickerMesh(data.image, 1.0);
+      const worldPos = gpsToAbsoluteWorldPosition(data.lat, data.lon);
+      
+      mesh.position.x = worldPos.x;
+      mesh.position.z = worldPos.z;
+      mesh.position.y = 0.5;
+      mesh.updateMatrix();
+      
+      if (scene) scene.add(mesh);
+      stickerMeshes.set(id, { mesh, data });
+      allStickerData.push({ id, ...data });
+      
+      console.log(`New sticker placed at world position: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+      
+      updateMapMarkers();
+    } catch (error) {
+      console.error("Failed to create sticker mesh:", error);
+    }
+  });
 
-stickersRef.on('child_removed', (snap) => {
-  const id = snap.key;
-  const entry = stickerMeshes.get(id);
-  
-  if (entry) {
-    scene.remove(entry.mesh);
-    entry.mesh.geometry.dispose();
-    entry.mesh.material.map?.dispose();
-    entry.mesh.material.dispose();
-    stickerMeshes.delete(id);
-  }
-  
-  allStickerData = allStickerData.filter(s => s.id !== id);
-  updateMapMarkers();
-});
+  stickersRef.on('child_removed', (snap) => {
+    const id = snap.key;
+    const entry = stickerMeshes.get(id);
+    
+    if (entry) {
+      if (scene) scene.remove(entry.mesh);
+      entry.mesh.geometry.dispose();
+      entry.mesh.material.map?.dispose();
+      entry.mesh.material.dispose();
+      stickerMeshes.delete(id);
+    }
+    
+    allStickerData = allStickerData.filter(s => s.id !== id);
+    updateMapMarkers();
+  });
+}
 
 // ===== INITIALIZE APP =====
 function initApp() {
@@ -665,4 +773,8 @@ function initApp() {
 }
 
 // Start the app when the page loads
-window.addEventListener('DOMContentLoaded', initApp);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
