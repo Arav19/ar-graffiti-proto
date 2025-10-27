@@ -286,6 +286,29 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    /* Debug controls for movement testing */
+    .debug-controls {
+      position: fixed;
+      bottom: 120px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 10px;
+    }
+
+    .debug-btn {
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -344,6 +367,14 @@
       <div>Nearby Stickers:</div>
       <div class="sticker-count" id="stickerCount">0</div>
     </div>
+
+    <!-- Debug movement controls (visible during development) -->
+    <div class="debug-controls" id="debugControls" style="display: none;">
+      <button class="debug-btn" onclick="moveForward()">↑ Forward</button>
+      <button class="debug-btn" onclick="moveBackward()">↓ Back</button>
+      <button class="debug-btn" onclick="moveLeft()">← Left</button>
+      <button class="debug-btn" onclick="moveRight()">→ Right</button>
+    </div>
     
     <div class="ar-ui">
       <button id="placeStickerBtn" class="btn btn-primary" style="display:none;">Place Here</button>
@@ -354,7 +385,68 @@
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   
-  <!-- Three.js -->
+  <!-- Three.js and main app -->
   <script type="module" src="./main.js"></script>
+
+  <!-- Debug movement functions -->
+  <script>
+    // Debug movement functions for testing
+    function moveForward() {
+      if (window.visualTracker && window.visualTracker.isTracking) {
+        const direction = new THREE.Vector3(0, 0, -1);
+        if (window.camera) {
+          direction.applyQuaternion(window.camera.quaternion);
+        }
+        direction.y = 0;
+        direction.normalize().multiplyScalar(1.0);
+        window.visualTracker.devicePosition.add(direction);
+        console.log('Moved forward 1m');
+      }
+    }
+
+    function moveBackward() {
+      if (window.visualTracker && window.visualTracker.isTracking) {
+        const direction = new THREE.Vector3(0, 0, 1);
+        if (window.camera) {
+          direction.applyQuaternion(window.camera.quaternion);
+        }
+        direction.y = 0;
+        direction.normalize().multiplyScalar(1.0);
+        window.visualTracker.devicePosition.add(direction);
+        console.log('Moved backward 1m');
+      }
+    }
+
+    function moveLeft() {
+      if (window.visualTracker && window.visualTracker.isTracking) {
+        const direction = new THREE.Vector3(-1, 0, 0);
+        if (window.camera) {
+          direction.applyQuaternion(window.camera.quaternion);
+        }
+        direction.y = 0;
+        direction.normalize().multiplyScalar(1.0);
+        window.visualTracker.devicePosition.add(direction);
+        console.log('Moved left 1m');
+      }
+    }
+
+    function moveRight() {
+      if (window.visualTracker && window.visualTracker.isTracking) {
+        const direction = new THREE.Vector3(1, 0, 0);
+        if (window.camera) {
+          direction.applyQuaternion(window.camera.quaternion);
+        }
+        direction.y = 0;
+        direction.normalize().multiplyScalar(1.0);
+        window.visualTracker.devicePosition.add(direction);
+        console.log('Moved right 1m');
+      }
+    }
+
+    // Show debug controls in development
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      document.getElementById('debugControls').style.display = 'flex';
+    }
+  </script>
 </body>
 </html>
