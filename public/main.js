@@ -31,10 +31,12 @@ const homePage = document.getElementById("homePage");
 const drawPage = document.getElementById("drawPage");
 const arPage = document.getElementById("arPage");
 const mapPage = document.getElementById("mapPage");
+const aboutPage = document.getElementById("aboutPage");
 
 const createStickerBtn = document.getElementById("createStickerBtn");
 const exploreBtn = document.getElementById("exploreBtn");
 const mapBtn = document.getElementById("mapBtn");
+const aboutBtn = document.getElementById("aboutBtn");
 
 const drawCanvas = document.getElementById("drawCanvas");
 const colorPicker = document.getElementById("colorPicker");
@@ -406,17 +408,19 @@ async function initMap() {
   
   leafletMap = L.map('map').setView([userGPS.lat, userGPS.lon], 15);
   
+  // Custom tile layer for canvas look (white land, black water)
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap',
+    attribution: '',
     maxZoom: 19
   }).addTo(leafletMap);
   
+  // User marker with custom styling
   L.marker([userGPS.lat, userGPS.lon], {
     icon: L.divIcon({
-      className: 'user-marker',
-      html: '<div style="font-size:30px">📍</div>',
-      iconSize: [30, 30],
-      iconAnchor: [15, 30]
+      className: 'user-marker-custom',
+      html: '<div style="font-size:35px">📍</div>',
+      iconSize: [35, 35],
+      iconAnchor: [17, 35]
     })
   }).addTo(leafletMap).bindPopup("You are here");
   

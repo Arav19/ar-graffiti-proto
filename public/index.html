@@ -19,7 +19,7 @@
       height: 100%;
       width: 100%;
       overflow: hidden;
-      background: #000;
+      background: #000 url('./images/background.jpg') center/cover no-repeat fixed;
       font-family: 'Impact', 'Arial Black', sans-serif;
       color: #fff;
     }
@@ -33,6 +33,7 @@
       align-items: center;
       justify-content: center;
       padding: 20px;
+      background: url('./images/background.jpg') center/cover no-repeat fixed;
     }
     
     .page.active {
@@ -41,7 +42,7 @@
 
     /* ===== HOME PAGE - SPRAY CAN DESIGN ===== */
     #homePage {
-      background: #000;
+      background: url('./images/background.jpg') center/cover no-repeat fixed;
       justify-content: flex-start;
       padding-top: 40px;
     }
@@ -95,7 +96,7 @@
       font-weight: 900;
       text-transform: uppercase;
       letter-spacing: 2px;
-      border-radius: 8px;
+      border-radius: 4px;
       cursor: pointer;
       box-shadow: 0 4px 15px rgba(255, 235, 59, 0.4);
       transform: rotate(-2deg);
@@ -122,7 +123,7 @@
 
     /* ===== DRAW PAGE ===== */
     #drawPage {
-      background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
+      background: url('./images/background.jpg') center/cover no-repeat fixed;
       justify-content: flex-start;
       padding-top: 60px;
     }
@@ -199,7 +200,7 @@
     .btn {
       padding: 14px 28px;
       border: none;
-      border-radius: 12px;
+      border-radius: 4px;
       font-size: 16px;
       font-weight: 900;
       cursor: pointer;
@@ -274,7 +275,7 @@
       gap: 12px;
       padding: 15px 20px;
       background: rgba(0, 0, 0, 0.85);
-      border-radius: 20px;
+      border-radius: 6px;
       backdrop-filter: blur(15px);
       border: 2px solid rgba(255, 235, 59, 0.3);
     }
@@ -287,7 +288,7 @@
       z-index: 10;
       padding: 12px 20px;
       background: rgba(0, 0, 0, 0.85);
-      border-radius: 12px;
+      border-radius: 6px;
       backdrop-filter: blur(15px);
       font-size: 14px;
       max-width: 90vw;
@@ -301,15 +302,16 @@
 
     .sticker-info {
       position: fixed;
-      top: calc(env(safe-area-inset-top, 20px) + 70px);
-      right: 20px;
+      top: calc(env(safe-area-inset-top, 20px) + 90px);
+      left: 50%;
+      transform: translateX(-50%);
       z-index: 10;
       padding: 10px 15px;
       background: rgba(0, 0, 0, 0.85);
-      border-radius: 10px;
+      border-radius: 6px;
       backdrop-filter: blur(10px);
       font-size: 12px;
-      max-width: 150px;
+      text-align: center;
       border: 2px solid rgba(118, 255, 3, 0.3);
       color: #FFEB3B;
       text-transform: uppercase;
@@ -352,14 +354,13 @@
     /* ===== MAP PAGE - CANVAS STYLE ===== */
     #mapPage {
       padding: 0;
-      background: #000;
+      background: url('./images/background.jpg') center/cover no-repeat fixed;
     }
 
     #map {
       width: 100%;
       height: 100%;
       z-index: 1;
-      filter: grayscale(1) contrast(150%) brightness(110%);
     }
 
     .map-overlay {
@@ -370,7 +371,7 @@
       z-index: 100;
       padding: 12px 20px;
       background: rgba(0, 0, 0, 0.9);
-      border-radius: 12px;
+      border-radius: 6px;
       backdrop-filter: blur(15px);
       font-size: 18px;
       color: #FFEB3B;
@@ -390,40 +391,79 @@
       gap: 12px;
       padding: 15px 20px;
       background: rgba(0, 0, 0, 0.9);
-      border-radius: 20px;
+      border-radius: 6px;
       backdrop-filter: blur(15px);
       border: 2px solid rgba(255, 235, 59, 0.3);
     }
 
-    /* Hide Leaflet attribution */
-    .leaflet-control-attribution {
+    /* Hide Leaflet controls */
+    .leaflet-control-attribution,
+    .leaflet-control-zoom {
       display: none !important;
     }
 
-    /* Custom map tile styling - Canvas look */
+    /* Minimal canvas-style map - white land, minimal details */
     .leaflet-tile-pane {
-      filter: grayscale(1) contrast(200%) brightness(120%) invert(1);
+      filter: grayscale(1) brightness(200%) contrast(80%);
+      opacity: 0.95;
     }
 
-    /* Custom sticker markers on map */
+    /* Remove sticker color filter - keep them colored */
     .sticker-marker-custom {
       width: 50px !important;
       height: 50px !important;
       border: none !important;
       background: none !important;
+      filter: none !important;
     }
 
     .sticker-marker-custom img {
       width: 100%;
       height: 100%;
       object-fit: contain;
-      filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.5));
+      filter: drop-shadow(2px 2px 6px rgba(0, 0, 0, 0.7));
     }
 
-    /* User marker styling */
+    /* User marker - pin drop style */
     .user-marker-custom {
-      font-size: 35px;
-      filter: drop-shadow(0 0 8px rgba(118, 255, 3, 0.8));
+      font-size: 40px;
+      filter: drop-shadow(0 4px 8px rgba(255, 0, 0, 0.8));
+    }
+
+    /* ===== ABOUT PAGE ===== */
+    #aboutPage {
+      background: url('./images/background.jpg') center/cover no-repeat fixed;
+      padding: 40px 20px;
+      overflow-y: auto;
+    }
+
+    .about-content {
+      max-width: 600px;
+      background: rgba(0, 0, 0, 0.85);
+      padding: 30px;
+      border-radius: 6px;
+      border: 3px solid #76FF03;
+    }
+
+    .about-content h2 {
+      color: #FFEB3B;
+      font-size: 32px;
+      margin-bottom: 20px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .about-content p {
+      color: #fff;
+      font-size: 16px;
+      line-height: 1.8;
+      margin-bottom: 15px;
+      font-family: Arial, sans-serif;
+    }
+
+    .about-content .highlight {
+      color: #76FF03;
+      font-weight: bold;
     }
   </style>
 </head>
