@@ -87,15 +87,14 @@
       margin-top: -30px;
     }
 
-    /* Rectangular home buttons */
     .home-btn {
       background: #000;
       color: #fff;
       border: none;
-      width: 180px;
-      height: 60px;
-      border-radius: 12px;
-      font-size: 18px;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      font-size: 16px;
       font-weight: 900;
       text-transform: uppercase;
       letter-spacing: 1px;
@@ -151,21 +150,21 @@
       border: 4px solid #FFEB3B;
     }
 
-    /* Solid draw controls */
     .draw-controls {
       display: flex;
       gap: 15px;
       align-items: center;
       margin: 20px 0;
       padding: 15px 20px;
-      background: #FFEB3B;
+      background: rgba(255, 235, 59, 0.1);
       border-radius: 15px;
-      border: 3px solid #000;
+      backdrop-filter: blur(10px);
+      border: 2px solid rgba(118, 255, 3, 0.3);
     }
 
     .draw-controls label {
       font-size: 14px;
-      color: #000;
+      color: #FFEB3B;
       text-transform: uppercase;
       letter-spacing: 1px;
     }
@@ -173,7 +172,7 @@
     input[type="color"] {
       width: 50px;
       height: 50px;
-      border: 3px solid #000;
+      border: 3px solid #76FF03;
       border-radius: 10px;
       cursor: pointer;
       background: transparent;
@@ -186,7 +185,7 @@
     }
 
     input[type="range"]::-webkit-slider-track {
-      background: #000;
+      background: rgba(118, 255, 3, 0.3);
       height: 6px;
       border-radius: 3px;
     }
@@ -195,7 +194,7 @@
       -webkit-appearance: none;
       width: 20px;
       height: 20px;
-      background: #000;
+      background: #76FF03;
       border-radius: 50%;
       cursor: pointer;
       margin-top: -7px;
@@ -232,14 +231,14 @@
     }
 
     .btn-secondary {
-      background: #fff;
-      color: #000;
-      border: 2px solid #000;
+      background: rgba(255, 255, 255, 0.1);
+      color: #FFEB3B;
+      border: 2px solid rgba(255, 235, 59, 0.5);
     }
 
     .btn-secondary:hover {
-      background: #FFEB3B;
-      border-color: #000;
+      background: rgba(255, 235, 59, 0.2);
+      border-color: #76FF03;
     }
 
     .btn-danger {
@@ -362,7 +361,7 @@
       border-radius: 50%;
     }
 
-    /* ===== MAP PAGE ===== */
+    /* ===== MAP PAGE - CANVAS STYLE ===== */
     #mapPage {
       padding: 0;
       background: url('./images/background.jpg') center/cover no-repeat fixed;
@@ -413,11 +412,13 @@
       display: none !important;
     }
 
+    /* Minimal canvas-style map - white land, minimal details */
     .leaflet-tile-pane {
       filter: grayscale(1) brightness(200%) contrast(80%);
       opacity: 0.95;
     }
 
+    /* Remove sticker color filter - keep them colored */
     .sticker-marker-custom {
       width: 50px !important;
       height: 50px !important;
@@ -433,6 +434,7 @@
       filter: drop-shadow(2px 2px 6px rgba(0, 0, 0, 0.7));
     }
 
+    /* User marker - pin drop style */
     .user-marker-custom {
       font-size: 40px;
       filter: drop-shadow(0 4px 8px rgba(255, 0, 0, 0.8));
@@ -475,9 +477,8 @@
     }
   </style>
 </head>
-
 <body>
-  <!-- HOME PAGE -->
+  <!-- HOME PAGE - SPRAY CAN DESIGN -->
   <div id="homePage" class="page active">
     <div class="logo-container">
       <img src="./images/logo.png" alt="Logo" />
@@ -527,7 +528,7 @@
     </div>
   </div>
 
-  <!-- MAP PAGE -->
+  <!-- MAP PAGE - CANVAS STYLE -->
   <div id="mapPage" class="page">
     <div id="map"></div>
     <div class="map-overlay">Sticker Canvas</div>
@@ -553,26 +554,35 @@
       <button id="saveStickerBtn" class="btn btn-primary">Save & Place</button>
     </div>
     
-    <div class="btn-group" style="margin-top: 15px;">
-      <button id="backFromDrawBtn" class="btn btn-secondary">Back</button>
+    <div class="btn-group" style="margin-top: 10px;">
+      <button id="backToHomeBtn" class="btn btn-secondary">Back</button>
     </div>
   </div>
 
   <!-- AR PAGE -->
   <div id="arPage" class="page">
-    <video id="cameraFeed" autoplay playsinline></video>
-    <canvas id="arCanvas"></canvas>
+    <video id="arVideo" autoplay playsinline muted></video>
+    <canvas id="three-canvas"></canvas>
+    
     <div class="reticle"></div>
-    <div id="arStatus" class="ar-status">Initializing AR...</div>
+    
+    <div class="ar-status" id="arStatus">Initializing AR...</div>
+    
+    <div class="sticker-info">
+      <div>Nearby:</div>
+      <div class="sticker-count" id="stickerCount">0</div>
+    </div>
+    
     <div class="ar-ui">
-      <button id="placeStickerBtn" class="btn btn-primary">Place Sticker</button>
-      <button id="exitArBtn" class="btn btn-secondary">Exit</button>
+      <button id="placeStickerBtn" class="btn btn-primary" style="display:none;">Place Here</button>
+      <button id="exitArBtn" class="btn btn-danger">Exit</button>
     </div>
   </div>
 
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./main.js"></script>
+  
+  <!-- Three.js -->
+  <script type="module" src="./main.js"></script>
 </body>
 </html>
