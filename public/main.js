@@ -45,6 +45,7 @@ const clearDrawBtn = document.getElementById("clearDrawBtn");
 const saveStickerBtn = document.getElementById("saveStickerBtn");
 const backToHomeBtn = document.getElementById("backToHomeBtn");
 const backFromMapBtn = document.getElementById("backFromMapBtn");
+const backFromAboutBtn = document.getElementById("backFromAboutBtn");
 
 const arVideo = document.getElementById("arVideo");
 const threeCanvas = document.getElementById("three-canvas");
@@ -73,7 +74,7 @@ function getUniqueUserId() {
 
 /* ===== PAGE NAVIGATION ===== */
 function showPage(pageName) {
-  [homePage, drawPage, arPage, mapPage].forEach(p => p.classList.remove("active"));
+  [homePage, drawPage, arPage, mapPage, aboutPage].forEach(p => p.classList.remove("active"));
   
   if (pageName === "home") homePage.classList.add("active");
   else if (pageName === "draw") drawPage.classList.add("active");
@@ -82,6 +83,7 @@ function showPage(pageName) {
     mapPage.classList.add("active");
     setTimeout(() => initMap(), 100);
   }
+  else if (pageName === "about") aboutPage.classList.add("active");
 }
 
 /* ===== DRAWING CANVAS ===== */
@@ -406,23 +408,27 @@ async function initMap() {
     }
   }
   
-  leafletMap = L.map('map').setView([userGPS.lat, userGPS.lon], 15);
+  leafletMap = L.map('map', {
+    zoomControl: false,
+    attributionControl: false
+  }).setView([userGPS.lat, userGPS.lon], 16);
   
-  // Custom tile layer for canvas look (white land, black water)
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  // Satellite-style tile layer for darker look
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: '',
-    maxZoom: 19
+    maxZoom: 19,
+    minZoom: 13
   }).addTo(leafletMap);
   
-  // User marker with custom styling
+  // User marker - RED PIN DROP
   L.marker([userGPS.lat, userGPS.lon], {
     icon: L.divIcon({
       className: 'user-marker-custom',
-      html: '<div style="font-size:35px">📍</div>',
-      iconSize: [35, 35],
-      iconAnchor: [17, 35]
+      html: '<div style="font-size:40px">📍</div>',
+      iconSize: [40, 40],
+      iconAnchor: [20, 40]
     })
-  }).addTo(leafletMap).bindPopup("You are here");
+  }).addTo(leafletMap).bindPopup("📍 You are here");
   
   updateMapMarkers();
 }
@@ -527,7 +533,15 @@ mapBtn.addEventListener("click", () => {
   showPage("map");
 });
 
+aboutBtn.addEventListener("click", () => {
+  showPage("about");
+});
+
 backFromMapBtn.addEventListener("click", () => {
+  showPage("home");
+});
+
+backFromAboutBtn.addEventListener("click", () => {
   showPage("home");
 });
 

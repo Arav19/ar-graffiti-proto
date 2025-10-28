@@ -62,7 +62,7 @@
     .spray-can-container {
       position: relative;
       width: 280px;
-      height: 500px;
+      height: 520px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -82,26 +82,30 @@
       z-index: 2;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 18px;
       align-items: center;
-      margin-top: -20px;
+      margin-top: -30px;
     }
 
     .home-btn {
-      background: linear-gradient(135deg, #FFEB3B 0%, #76FF03 100%);
-      color: #000;
+      background: #000;
+      color: #fff;
       border: none;
-      padding: 15px 35px;
-      font-size: 18px;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      font-size: 16px;
       font-weight: 900;
       text-transform: uppercase;
-      letter-spacing: 2px;
-      border-radius: 4px;
+      letter-spacing: 1px;
       cursor: pointer;
-      box-shadow: 0 4px 15px rgba(255, 235, 59, 0.4);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
       transform: rotate(-2deg);
       transition: all 0.2s;
       position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .home-btn:nth-child(2) {
@@ -112,9 +116,14 @@
       transform: rotate(-1.5deg);
     }
 
+    .home-btn:nth-child(4) {
+      transform: rotate(0.5deg);
+    }
+
     .home-btn:hover {
       transform: scale(1.05) rotate(0deg);
-      box-shadow: 0 6px 25px rgba(118, 255, 3, 0.6);
+      box-shadow: 0 8px 30px rgba(118, 255, 3, 0.6);
+      background: #111;
     }
 
     .home-btn:active {
@@ -316,6 +325,7 @@
       color: #FFEB3B;
       text-transform: uppercase;
       letter-spacing: 1px;
+      min-width: 100px;
     }
 
     .sticker-count {
@@ -481,7 +491,40 @@
         <button id="createStickerBtn" class="home-btn">Create</button>
         <button id="exploreBtn" class="home-btn">Explore</button>
         <button id="mapBtn" class="home-btn">Map</button>
+        <button id="aboutBtn" class="home-btn">About</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ABOUT PAGE -->
+  <div id="aboutPage" class="page">
+    <div class="about-content">
+      <h2>About Surfaceless NYC</h2>
+      <p>
+        <span class="highlight">Surfaceless</span> is a GPS-anchored AR graffiti app that turns New York City into your canvas.
+      </p>
+      <p>
+        Create digital stickers and place them at <span class="highlight">real-world locations</span>. Your art stays exactly where you left it - visible to anyone who visits that spot.
+      </p>
+      <p>
+        Walk through the city and <span class="highlight">discover other artists' work</span> anchored to streets, parks, and landmarks. Each sticker is permanently tied to its GPS coordinates.
+      </p>
+      <p>
+        <span class="highlight">How it works:</span>
+      </p>
+      <p>
+        1. Draw your sticker<br/>
+        2. Walk to a location<br/>
+        3. Place it in AR<br/>
+        4. Your art lives there forever
+      </p>
+      <p>
+        Transform the streets. Leave your mark. <span class="highlight">Bomb the city digitally.</span>
+      </p>
+    </div>
+    
+    <div class="btn-group" style="margin-top: 20px;">
+      <button id="backFromAboutBtn" class="btn btn-secondary">Back</button>
     </div>
   </div>
 
