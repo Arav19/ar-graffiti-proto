@@ -1,7 +1,5 @@
-// main.js — Full updated file (keeps your original working pieces, fixes anchoring,
-// adds hybrid heading/orientation capture, smoothing, and hooks for visual anchors)
+// main.js — Full hybrid GPS + visual AR, mobile-first, keeps original logic
 
-// Keep existing imports and Firebase config exactly as you provided
 import * as THREE from "https://unpkg.com/three@0.171.0/build/three.module.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import {
@@ -66,12 +64,12 @@ let leafletMap = null;
 let mapMarkers = [];
 let allStickerData = [];
 
-/* ===== Orientation & compass state (NEW for hybrid) ===== */
+/* ===== Orientation & compass state ===== */
 let lastDeviceOrientation = { alpha: null, beta: null, gamma: null, absolute: false };
-let lastCompassHeading = null; // in degrees (0 = north)
+let lastCompassHeading = null;
 let lastDeviceQuaternion = new THREE.Quaternion();
 
-/* ===== UTIL: Unique user id ===== */
+/* ===== UTILITIES ===== */
 function getUniqueUserId() {
   let uid = localStorage.getItem("ar_stickers_uid");
   if (!uid) {
@@ -98,17 +96,13 @@ function showPage(pageName) {
 /* ===== DRAWING CANVAS ===== */
 const drawCtx = drawCanvas.getContext("2d");
 drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-
 let isDrawing = false;
 
 function getDrawPos(e) {
   const rect = drawCanvas.getBoundingClientRect();
   const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
   const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
-  return {
-    x: x * (drawCanvas.width / rect.width),
-    y: y * (drawCanvas.height / rect.height)
-  };
+  return { x: x * (drawCanvas.width / rect.width), y: y * (drawCanvas.height / rect.height) };
 }
 
 drawCanvas.addEventListener("pointerdown", (e) => {
@@ -132,50 +126,32 @@ drawCanvas.addEventListener("pointermove", (e) => {
 drawCanvas.addEventListener("pointerup", () => isDrawing = false);
 drawCanvas.addEventListener("pointerleave", () => isDrawing = false);
 
-clearDrawBtn.addEventListener("click", () => {
-  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-});
+clearDrawBtn.addEventListener("click", () => drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height));
 
 /* ===== GPS UTILITIES ===== */
-const EARTH_RADIUS = 6378137; // meters
+const EARTH_RADIUS = 6378137;
+const WORLD_ORIGIN = { lat: 40.758896, lon: -73.985130 }; // Times Square
 
-// FIXED WORLD ORIGIN - Times Square, NYC (same for EVERYONE)
-const WORLD_ORIGIN = {
-  lat: 40.758896,
-  lon: -73.985130
-};
-
-// Convert GPS coordinates to absolute world position in meters
 function gpsToAbsoluteWorldPosition(lat, lon) {
   const dLat = (lat - WORLD_ORIGIN.lat) * Math.PI / 180;
   const dLon = (lon - WORLD_ORIGIN.lon) * Math.PI / 180;
-  
   const x = dLon * EARTH_RADIUS * Math.cos(WORLD_ORIGIN.lat * Math.PI / 180);
-  const z = -dLat * EARTH_RADIUS; // North is negative Z in THREE.js
-  
+  const z = -dLat * EARTH_RADIUS;
   return { x, z };
 }
 
 function getCurrentGPS() {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      return reject(new Error("Geolocation not available"));
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(pos.coords),
-      reject,
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
-    );
+    if (!navigator.geolocation) return reject(new Error("Geolocation not available"));
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
   });
 }
 
-/* ===== SMOOTH CAMERA (reduce jitter) ===== */
 let targetCameraPos = new THREE.Vector3(0, 1.6, 0);
-const cameraLerpFactor = 0.25; // 0-1, lower = smoother/slower
+const cameraLerpFactor = 0.25;
 
 function startGPSWatch() {
   if (!navigator.geolocation || gpsWatchId) return;
-  
   gpsWatchId = navigator.geolocation.watchPosition(
     (pos) => {
       userGPS = {
@@ -184,8 +160,6 @@ function startGPSWatch() {
         alt: pos.coords.altitude || 0,
         accuracy: pos.coords.accuracy
       };
-      
-      // compute target camera world position (smoothed in render loop)
       const worldPos = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
       targetCameraPos.set(worldPos.x, 1.6, worldPos.z);
     },
@@ -195,18 +169,12 @@ function startGPSWatch() {
 }
 
 function stopGPSWatch() {
-  if (gpsWatchId) {
-    navigator.geolocation.clearWatch(gpsWatchId);
-    gpsWatchId = null;
-  }
+  if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
+  gpsWatchId = null;
 }
 
 /* ===== THREE.JS SCENE ===== */
-const renderer = new THREE.WebGLRenderer({
-  canvas: threeCanvas,
-  antialias: true,
-  alpha: true
-});
+const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputEncoding = THREE.sRGBEncoding;
@@ -214,46 +182,27 @@ renderer.outputEncoding = THREE.sRGBEncoding;
 const scene = new THREE.Scene();
 scene.background = null;
 
-const camera = new THREE.PerspectiveCamera(
-  75,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000
-);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 1.6, 0);
 
 const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
 scene.add(light);
 
-// Store sticker meshes: stickerId -> { mesh, data }
 const stickerMeshes = new Map();
 
-/* ===== CREATE STICKER MESH ===== */
 function createStickerMesh(base64Image, sizeMeters = 1.2) {
   const texture = new THREE.TextureLoader().load(base64Image);
   texture.encoding = THREE.sRGBEncoding;
-  
   const geometry = new THREE.PlaneGeometry(sizeMeters, sizeMeters);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true,
-    side: THREE.DoubleSide,
-    depthWrite: false
-  });
-  
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
   const mesh = new THREE.Mesh(geometry, material);
-  
-  // Default: flat on ground
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = 0.02;
-  
-  // We'll lock matrix after placement
   mesh.matrixAutoUpdate = false;
-  
   return mesh;
 }
 
-/* ===== DEVICE ORIENTATION (capture for hybrid anchoring) ===== */
+/* ===== DEVICE ORIENTATION ===== */
 const zee = new THREE.Vector3(0, 0, 1);
 const euler = new THREE.Euler();
 const q0 = new THREE.Quaternion();
@@ -261,523 +210,221 @@ const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 
 function setDeviceQuaternion(quaternion, alpha, beta, gamma, orient) {
   const degToRad = Math.PI / 180;
-  
-  euler.set(
-    beta * degToRad,
-    alpha * degToRad,
-    -gamma * degToRad,
-    'YXZ'
-  );
-  
+  euler.set(beta * degToRad, alpha * degToRad, -gamma * degToRad, 'YXZ');
   quaternion.setFromEuler(euler);
   quaternion.multiply(q1);
   quaternion.multiply(q0.setFromAxisAngle(zee, -orient * degToRad));
 }
 
-/* helper to compute compass heading from alpha on many browsers */
 function updateCompassHeadingFromAlpha(alpha, absolute) {
-  // If alpha is null/undefined, do nothing
   if (alpha == null) return;
-  // alpha is degrees where 0 is north on many devices when absolute==true
   lastCompassHeading = alpha;
 }
 
-/* deviceorientation handler -- used both to orient camera and capture heading/orientation */
 function handleDeviceOrientation(event) {
-  // record orientation values for hybrid saving
   lastDeviceOrientation.alpha = event.alpha;
   lastDeviceOrientation.beta = event.beta;
   lastDeviceOrientation.gamma = event.gamma;
   lastDeviceOrientation.absolute = !!event.absolute;
-  
-  // update compass heading if alpha exists
-  if (event.alpha != null) {
-    updateCompassHeadingFromAlpha(event.alpha, event.absolute);
-  }
-  
-  // update Three.js camera quaternion so view rotates with device
-  if (event.alpha != null) {
-    setDeviceQuaternion(
-      camera.quaternion,
-      event.alpha,
-      event.beta || 0,
-      event.gamma || 0,
-      screenOrientation
-    );
-  }
-  
-  // Save last device quaternion for possible saving with sticker
+  if (event.alpha != null) updateCompassHeadingFromAlpha(event.alpha, event.absolute);
+  if (event.alpha != null) setDeviceQuaternion(camera.quaternion, event.alpha, event.beta || 0, event.gamma || 0, screenOrientation);
   lastDeviceQuaternion.copy(camera.quaternion);
 }
 
 let screenOrientation = 0;
-
-function getScreenOrientation() {
-  return screen.orientation?.angle || window.orientation || 0;
-}
-
+function getScreenOrientation() { return window.screen.orientation?.angle || window.orientation || 0; }
 screenOrientation = getScreenOrientation();
-window.addEventListener('orientationchange', () => {
-  screenOrientation = getScreenOrientation();
-});
+window.addEventListener('orientationchange', () => { screenOrientation = getScreenOrientation(); });
 
 function startOrientationTracking() {
-  // On iOS 13+ you must request permission for deviceorientation
-  if (typeof DeviceOrientationEvent !== "undefined" && 
-      typeof DeviceOrientationEvent.requestPermission === "function") {
+  if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
     DeviceOrientationEvent.requestPermission().then(permission => {
-      if (permission === "granted") {
-        window.addEventListener("deviceorientation", handleDeviceOrientation, true);
-      } else {
-        console.warn("DeviceOrientation permission not granted");
-      }
-    }).catch(err => {
-      console.warn("Orientation permission denied:", err);
-      // fallback to listening anyway (some browsers will still dispatch)
-      window.addEventListener("deviceorientation", handleDeviceOrientation, true);
-    });
-  } else {
-    window.addEventListener("deviceorientation", handleDeviceOrientation, true);
-  }
+      if (permission === "granted") window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+      else console.warn("DeviceOrientation permission not granted");
+    }).catch(err => { window.addEventListener("deviceorientation", handleDeviceOrientation, true); });
+  } else window.addEventListener("deviceorientation", handleDeviceOrientation, true);
 }
 
-function stopOrientationTracking() {
-  window.removeEventListener("deviceorientation", handleDeviceOrientation, true);
-}
+function stopOrientationTracking() { window.removeEventListener("deviceorientation", handleDeviceOrientation, true); }
 
-/* ===== UPDATE STICKER VISIBILITY ===== */
+/* ===== STICKER VISIBILITY ===== */
 function updateStickerVisibility() {
   if (!userGPS) return;
-  
   let nearbyCount = 0;
-  
   stickerMeshes.forEach((entry) => {
     const { mesh } = entry;
-    
-    // Calculate distance from camera to sticker (sticker position NEVER changes)
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
-    const distance = Math.sqrt(dx * dx + dz * dz);
-    
-    // Show only within 100m
+    const distance = Math.sqrt(dx*dx + dz*dz);
     mesh.visible = distance < 100;
     if (mesh.visible) nearbyCount++;
   });
-  
-  if (stickerCount) {
-    stickerCount.textContent = nearbyCount.toString();
-  }
+  if (stickerCount) stickerCount.textContent = nearbyCount.toString();
 }
 
 /* ===== FIREBASE LISTENERS ===== */
 onChildAdded(stickersRef, (snap) => {
   const id = snap.key;
   const data = snap.val();
-  
-  if (stickerMeshes.has(id)) return;
-  if (!data.image || (data.lat == null) || (data.lon == null)) return;
-  
-  const sizeMeters = data.sizeMeters || 1.2;
-  const mesh = createStickerMesh(data.image, sizeMeters);
-  
-  // CRITICAL: Set sticker at ABSOLUTE world position (NEVER changes)
+  if (stickerMeshes.has(id) || !data.image || data.lat==null || data.lon==null) return;
+  const mesh = createStickerMesh(data.image, data.sizeMeters || 1.2);
   const worldPos = gpsToAbsoluteWorldPosition(data.lat, data.lon);
   mesh.position.x = worldPos.x;
   mesh.position.z = worldPos.z;
   mesh.position.y = (data.alt || 0) + 0.02;
-  
-  // HYBRID ALIGNMENT: if heading saved, rotate so sticker faces the same world heading
-  // Note: mesh has rotation.x = -PI/2 (flat). rotation.y rotates around up axis prior to that,
-  // so to face toward a compass heading we set rotation.y = heading radians.
-  if (data.heading != null) {
-    // heading stored in degrees, 0 = north
-    const headingRad = THREE.MathUtils.degToRad(data.heading);
-    mesh.rotation.y = headingRad;
-  } else if (data.orientationQuaternion) {
-    // optional: if the creator saved a full orientation quaternion, we can attempt to use it.
+  if (data.heading != null) mesh.rotation.y = THREE.MathUtils.degToRad(data.heading);
+  else if (data.orientationQuaternion) {
     try {
-      const q = new THREE.Quaternion(
-        data.orientationQuaternion._x,
-        data.orientationQuaternion._y,
-        data.orientationQuaternion._z,
-        data.orientationQuaternion._w
-      );
-      // apply quaternion to mesh orientation (but keep mesh flat on ground: combine transforms)
-      // For simplicity we only use Y rotation from quaternion:
-      const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
-      mesh.rotation.y = e.y;
-    } catch (e) {
-      // ignore if malformed
-    }
-  } else {
-    mesh.rotation.y = 0;
-  }
-  
-  // Update matrix once and lock it
+      const q = new THREE.Quaternion(data.orientationQuaternion._x, data.orientationQuaternion._y, data.orientationQuaternion._z, data.orientationQuaternion._w);
+      mesh.rotation.y = new THREE.Euler().setFromQuaternion(q,'YXZ').y;
+    } catch(e){}
+  } else mesh.rotation.y = 0;
   mesh.updateMatrix();
-  
   scene.add(mesh);
-  stickerMeshes.set(id, { mesh, data });
-  allStickerData.push({ id, ...data });
-  
-  console.log(`Sticker ${id} LOCKED at GPS (${data.lat.toFixed(6)}, ${data.lon.toFixed(6)}) = World (${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`);
-
-  // Hook: try visual anchor sync (placeholder for cloud/local anchors)
-  tryVisualAnchorSync(id, mesh, data);
-  
+  stickerMeshes.set(id,{ mesh,data });
+  allStickerData.push({ id,...data });
+  tryVisualAnchorSync(id,mesh,data);
   updateMapMarkers();
 });
 
 onChildRemoved(stickersRef, (snap) => {
   const id = snap.key;
   const entry = stickerMeshes.get(id);
-  
-  if (entry) {
+  if(entry){
     scene.remove(entry.mesh);
     entry.mesh.geometry.dispose();
     entry.mesh.material.map?.dispose();
     entry.mesh.material.dispose();
     stickerMeshes.delete(id);
   }
-  
-  allStickerData = allStickerData.filter(s => s.id !== id);
+  allStickerData = allStickerData.filter(s=>s.id!==id);
   updateMapMarkers();
 });
 
-/* ===== TRY VISUAL ANCHOR SYNC (placeholder hook) =====
-   This is intentionally empty for now. When you later add cloud anchors
-   or WebXR anchors, resolve/create anchors here and store anchor keys to Firebase.
-*/
 function tryVisualAnchorSync(id, mesh, data) {
-  // No-op for now. Placeholder where you'd:
-  // - When near and AR hit-test available, create AR anchor at mesh world position.
-  // - Save anchor id to Firebase so other devices can resolve it.
-  // - On resolve, replace the absolute-mesh position with anchor-based transforms.
-  return;
+  // placeholder for plane/anchor sync in future
 }
 
 /* ===== MAP INTEGRATION ===== */
-async function initMap() {
-  // Load all stickers first
-  if (allStickerData.length === 0) {
-    try {
+async function initMap(){
+  if(allStickerData.length===0){
+    try{
       const snapshot = await get(stickersRef);
       const data = snapshot.val();
-      if (data) {
-        allStickerData = Object.entries(data).map(([id, val]) => ({ id, ...val }));
-      }
-    } catch (e) {
-      console.warn("Failed to load stickers for map:", e);
-    }
+      if(data) allStickerData = Object.entries(data).map(([id,val])=>({id,...val}));
+    }catch(e){console.warn("Failed to load stickers for map:", e);}
   }
-  
-  if (leafletMap) {
-    leafletMap.invalidateSize();
-    updateMapMarkers();
-    return;
-  }
-  
-  // Get user GPS if not available
-  if (!userGPS) {
-    try {
+  if(leafletMap){leafletMap.invalidateSize(); updateMapMarkers(); return;}
+  if(!userGPS){
+    try{
       const coords = await getCurrentGPS();
-      userGPS = {
-        lat: coords.latitude,
-        lon: coords.longitude,
-        alt: coords.altitude || 0,
-        accuracy: coords.accuracy
-      };
-    } catch (e) {
-      console.warn("GPS not available, using default location");
-      userGPS = { lat: 40.7589, lon: -73.9851, alt: 0, accuracy: 999 };
-    }
+      userGPS = { lat: coords.latitude, lon: coords.longitude, alt: coords.altitude||0, accuracy: coords.accuracy };
+    }catch(e){userGPS={lat:40.7589,lon:-73.9851,alt:0,accuracy:999};}
   }
-  
-  leafletMap = L.map('map', {
-    zoomControl: false,
-    attributionControl: false
-  }).setView([userGPS.lat, userGPS.lon], 16);
-  
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    attribution: '',
-    maxZoom: 19,
-    minZoom: 13
-  }).addTo(leafletMap);
-  
-  L.marker([userGPS.lat, userGPS.lon], {
-    icon: L.divIcon({
-      className: 'user-marker-custom',
-      html: '<div style="font-size:40px">📍</div>',
-      iconSize: [40, 40],
-      iconAnchor: [20, 40]
-    })
-  }).addTo(leafletMap).bindPopup("📍 You are here");
-  
+  leafletMap = L.map('map',{ zoomControl:false, attributionControl:false }).setView([userGPS.lat,userGPS.lon],16);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution:'', maxZoom:19, minZoom:13 }).addTo(leafletMap);
+  L.marker([userGPS.lat,userGPS.lon],{icon:L.divIcon({className:'user-marker-custom', html:'<div style="font-size:40px">📍</div>', iconSize:[40,40], iconAnchor:[20,40]})}).addTo(leafletMap).bindPopup("📍 You are here");
   updateMapMarkers();
 }
 
-function updateMapMarkers() {
-  if (!leafletMap) return;
-  
-  mapMarkers.forEach(m => leafletMap.removeLayer(m));
-  mapMarkers = [];
-  
-  allStickerData.forEach((data) => {
-    if (!data.lat || !data.lon) return;
-    
-    const marker = L.marker([data.lat, data.lon], {
-      icon: L.divIcon({
-        className: 'sticker-marker-custom',
-        html: `<img src="${data.image}" style="width:50px;height:50px;object-fit:contain;" />`,
-        iconSize: [50, 50],
-        iconAnchor: [25, 25]
-      })
-    }).addTo(leafletMap);
-    
-    if (data.image) {
-      marker.bindPopup(`<img src="${data.image}" style="width:150px;height:150px;object-fit:contain;background:white;border-radius:10px;padding:5px;"/>`);
-    }
-    
+function updateMapMarkers(){
+  if(!leafletMap) return;
+  mapMarkers.forEach(m=>leafletMap.removeLayer(m));
+  mapMarkers=[];
+  allStickerData.forEach(data=>{
+    if(!data.lat||!data.lon) return;
+    const marker=L.marker([data.lat,data.lon],{icon:L.divIcon({className:'sticker-marker-custom', html:`<img src="${data.image}" style="width:50px;height:50px;object-fit:contain;" />`, iconSize:[50,50], iconAnchor:[25,25]})}).addTo(leafletMap);
+    if(data.image) marker.bindPopup(`<img src="${data.image}" style="width:150px;height:150px;object-fit:contain;background:white;border-radius:10px;padding:5px;" />`);
     mapMarkers.push(marker);
   });
-  
-  console.log(`Map: ${mapMarkers.length} stickers`);
 }
 
 /* ===== RENDER LOOP ===== */
-let isRendering = false;
-
-function startRendering() {
-  if (isRendering) return;
-  isRendering = true;
-  
-  function animate() {
-    if (!isRendering) return;
+let isRendering=false;
+function startRendering(){
+  if(isRendering) return;
+  isRendering=true;
+  (function animate(){
+    if(!isRendering) return;
     requestAnimationFrame(animate);
-    
-    // Smoothly move camera toward GPS-derived target (reduces jitter)
-    camera.position.lerp(targetCameraPos, cameraLerpFactor);
-    
+    camera.position.lerp(targetCameraPos,cameraLerpFactor);
     updateStickerVisibility();
-    renderer.render(scene, camera);
-  }
-  
-  animate();
+    renderer.render(scene,camera);
+  })();
 }
-
-function stopRendering() {
-  isRendering = false;
-}
+function stopRendering(){isRendering=false;}
 
 /* ===== CAMERA STREAM ===== */
-async function startCamera() {
-  try {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(t => t.stop());
-    }
-    
-    cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { 
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
-      },
-      audio: false
-    });
-    
-    arVideo.srcObject = cameraStream;
+async function startCamera(){
+  try{
+    if(cameraStream) cameraStream.getTracks().forEach(t=>t.stop());
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:"environment" }, width:{ideal:1920}, height:{ideal:1080} }, audio:false });
+    arVideo.srcObject=cameraStream;
     await arVideo.play();
-    
     return true;
-  } catch (e) {
-    console.error("Camera error:", e);
-    arStatus.textContent = "Camera permission required";
-    return false;
-  }
+  }catch(e){console.error("Camera error:",e); arStatus.textContent="Camera permission required"; return false;}
 }
+function stopCamera(){if(cameraStream) cameraStream.getTracks().forEach(t=>t.stop()); cameraStream=null; arVideo.srcObject=null;}
 
-function stopCamera() {
-  if (cameraStream) {
-    cameraStream.getTracks().forEach(t => t.stop());
-    cameraStream = null;
-  }
-  arVideo.srcObject = null;
-}
+/* ===== UI BUTTONS ===== */
+createStickerBtn.addEventListener("click",()=>showPage("draw"));
+exploreBtn.addEventListener("click",async()=>await enterARMode(false));
+mapBtn.addEventListener("click",()=>showPage("map"));
+aboutBtn.addEventListener("click",()=>showPage("about"));
+backFromMapBtn.addEventListener("click",()=>showPage("home"));
+backFromAboutBtn.addEventListener("click",()=>showPage("home"));
+backToHomeBtn.addEventListener("click",()=>showPage("home"));
 
-/* ===== UI BUTTON HANDLERS ===== */
-createStickerBtn.addEventListener("click", () => {
-  showPage("draw");
-});
-
-exploreBtn.addEventListener("click", async () => {
-  await enterARMode(false);
-});
-
-mapBtn.addEventListener("click", () => {
-  showPage("map");
-});
-
-aboutBtn.addEventListener("click", () => {
-  showPage("about");
-});
-
-backFromMapBtn.addEventListener("click", () => {
-  showPage("home");
-});
-
-backFromAboutBtn.addEventListener("click", () => {
-  showPage("home");
-});
-
-backToHomeBtn.addEventListener("click", () => {
-  showPage("home");
-});
-
-saveStickerBtn.addEventListener("click", async () => {
+saveStickerBtn.addEventListener("click",async()=>{
   pendingStickerImage = drawCanvas.toDataURL("image/png");
   await enterARMode(true);
 });
 
-placeStickerBtn.addEventListener("click", async () => {
-  if (!pendingStickerImage || !userGPS) {
-    arStatus.textContent = "Waiting for GPS...";
-    return;
-  }
-  
-  placeStickerBtn.disabled = true;
-  arStatus.textContent = "Placing sticker...";
-  
-  try {
-    // Add hybrid metadata: heading + orientation quaternion (if available)
-    const stickerData = {
+placeStickerBtn.addEventListener("click",async()=>{
+  if(!pendingStickerImage||!userGPS){arStatus.textContent="Waiting for GPS..."; return;}
+  placeStickerBtn.disabled=true; arStatus.textContent="Placing sticker...";
+  try{
+    const stickerData={
       image: pendingStickerImage,
       lat: userGPS.lat,
       lon: userGPS.lon,
       alt: userGPS.alt,
       accuracy: userGPS.accuracy,
-      owner: getUniqueUserId(),
-      createdAt: Date.now(),
-      // heading: lastCompassHeading may be null on some devices—store only if available
-      heading: (lastCompassHeading != null) ? lastCompassHeading : null,
-      // orientation quaternion snapshot (for advanced alignment if you implement quaternion parsing)
-      orientationQuaternion: {
-        _x: lastDeviceQuaternion.x || 0,
-        _y: lastDeviceQuaternion.y || 0,
-        _z: lastDeviceQuaternion.z || 0,
-        _w: lastDeviceQuaternion.w || 1
-      },
-      // store precalculated world coords for debugging / quick resolution
-      world: gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon)
+      owner:getUniqueUserId(),
+      createdAt:Date.now(),
+      heading:lastCompassHeading!=null?lastCompassHeading:null,
+      orientationQuaternion:{_x:lastDeviceQuaternion.x||0,_y:lastDeviceQuaternion.y||0,_z:lastDeviceQuaternion.z||0,_w:lastDeviceQuaternion.w||1},
+      sizeMeters:1.2
     };
-    
-    await push(stickersRef, stickerData);
-    
-    arStatus.textContent = `Placed at (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)})`;
-    placeStickerBtn.style.display = "none";
-    pendingStickerImage = null;
-    
-    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-    
-  } catch (e) {
-    console.error("Failed to place sticker:", e);
-    arStatus.textContent = "Failed to place sticker";
-    placeStickerBtn.disabled = false;
-  }
+    const newRef = push(stickersRef);
+    await set(newRef,stickerData);
+    pendingStickerImage=null;
+    arStatus.textContent="Sticker placed!";
+  }catch(e){console.error(e); arStatus.textContent="Failed to place sticker";}
+  placeStickerBtn.disabled=false;
 });
 
-exitArBtn.addEventListener("click", () => {
-  exitARMode();
-  showPage("home");
-});
-
-/* ===== ENTER/EXIT AR MODE ===== */
-async function enterARMode(placingSticker = false) {
+/* ===== ENTER AR MODE ===== */
+async function enterARMode(isPlacingSticker){
   showPage("ar");
-  arStatus.textContent = "Starting AR...";
-  
-  try {
-    if (typeof DeviceMotionEvent !== "undefined" && 
-        typeof DeviceMotionEvent.requestPermission === "function") {
-      await DeviceMotionEvent.requestPermission();
-    }
-    
-    if (typeof DeviceOrientationEvent !== "undefined" && 
-        typeof DeviceOrientationEvent.requestPermission === "function") {
-      await DeviceOrientationEvent.requestPermission();
-    }
-  } catch (e) {
-    console.warn("Permission request:", e);
-  }
-  
-  // start camera
-  const cameraOk = await startCamera();
-  if (!cameraOk) return;
-  
-  // get GPS once (initial)
-  try {
-    arStatus.textContent = "Getting GPS...";
-    const coords = await getCurrentGPS();
-    userGPS = {
-      lat: coords.latitude,
-      lon: coords.longitude,
-      alt: coords.altitude || 0,
-      accuracy: coords.accuracy
-    };
-    
-    // set initial camera position immediately (non-smoothed)
-    const worldPos = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
-    targetCameraPos.set(worldPos.x, 1.6, worldPos.z);
-    camera.position.copy(targetCameraPos);
-    
-    console.log(`Camera at GPS (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)}) = World (${worldPos.x.toFixed(1)}m, ${worldPos.z.toFixed(1)}m)`);
-    arStatus.textContent = `GPS: ±${Math.round(coords.accuracy)}m`;
-  } catch (e) {
-    console.error("GPS error:", e);
-    arStatus.textContent = "GPS required";
-    return;
-  }
-  
   startGPSWatch();
   startOrientationTracking();
+  await startCamera();
   startRendering();
-  
-  if (placingSticker && pendingStickerImage) {
-    placeStickerBtn.style.display = "";
-    placeStickerBtn.disabled = false;
-    arStatus.textContent = "Tap Place to anchor sticker here";
-  } else {
-    placeStickerBtn.style.display = "none";
-    arStatus.textContent = "Looking for stickers...";
-  }
+  if(isPlacingSticker) arStatus.textContent="Pan camera to place sticker, then tap 'Place Sticker'";
+  else arStatus.textContent="Explore nearby stickers";
 }
 
-function exitARMode() {
-  stopCamera();
+/* ===== EXIT AR MODE ===== */
+function exitARMode(){
   stopGPSWatch();
   stopOrientationTracking();
   stopRendering();
-  placeStickerBtn.style.display = "none";
-  pendingStickerImage = null;
+  stopCamera();
+  showPage("home");
+  arStatus.textContent="";
 }
+exitArBtn.addEventListener("click",exitARMode);
 
-/* ===== WINDOW RESIZE ===== */
-window.addEventListener("resize", () => {
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-});
-
-/* ===== INITIAL LOAD: fetch stickers for map and cache ===== */
-(async function initialLoad() {
-  try {
-    const snapshot = await get(stickersRef);
-    const data = snapshot.val();
-    if (data) {
-      allStickerData = Object.entries(data).map(([id, val]) => ({ id, ...val }));
-    }
-  } catch (e) {
-    console.warn("Could not fetch initial stickers:", e);
-  }
-})();
-
-console.log("AR Stickers loaded - World Origin: Times Square (absolute) — Hybrid heading enabled");
+/* ===== INITIAL ===== */
+showPage("home");
