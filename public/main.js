@@ -76,6 +76,17 @@ let xrViewerSpace = null;
 let lastHitPose = null; // last hit-test pose (for placing preview)
 let xrSupported = false;
 
+/* ===== XR / world mapping state ===== */
+/*
+  We keep a simple mapping between your "world coordinates" (meters from WORLD_ORIGIN)
+  and the XR local coordinate system. When XR starts we capture the user's current
+  GPS world coordinates (userWorldAtXRStart) and treat the XR origin as that location.
+  Then each sticker's world position is converted to XR-local by: stickerWorld - userWorldAtXRStart.
+  This is an approximation but works for the local scale AR experience.
+*/
+let userWorldAtXRStart = null; // { x, z } in world meters (y handled by alt)
+let runningPlaceMode = false; // tracked across enter/exit
+
 /* ===== UTIL: Unique user id ===== */
 function getUniqueUserId() {
   let uid = localStorage.getItem("ar_stickers_uid");
@@ -187,6 +198,9 @@ function startGPSWatch() {
       };
       // smoothing update
       smoothGPSUpdate(userGPS.lat, userGPS.lon);
+
+      // If XR running and we haven't recorded userWorldAtXRStart yet, we shouldn't update it —
+      // we keep the XR start mapping fixed to avoid jumps. If XR not running, camera uses GPS.
     },
     (err) => console.warn("GPS watch error:", err),
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
@@ -239,6 +253,8 @@ function createStickerMesh(base64Image, sizeMeters = 1.2) {
   mesh.position.y = 0.02;
   mesh.matrixAutoUpdate = false;
   mesh.userData.lerpTarget = null; // used to smoothly move to anchor when resolved
+  mesh.userData.world = null; // we will store world coords here {x,y,z}
+  mesh.userData.xrlocal = null; // computed xr-local pos when XR starts
   return mesh;
 }
 
@@ -312,8 +328,7 @@ function stopOrientationTracking() {
 
 /* ===== UPDATE STICKER VISIBILITY & SMOOTH TRANSFORMS ===== */
 function updateStickerVisibility() {
-  if (!userGPS) return;
-
+  // If userGPS is null we still can show stickers if XR active & xrlocal is set
   let nearbyCount = 0;
   stickerMeshes.forEach((entry, id) => {
     const mesh = entry.mesh;
@@ -328,7 +343,7 @@ function updateStickerVisibility() {
       mesh.updateMatrix();
     }
 
-    // Distance check (based on world coordinates)
+    // Distance check (based on world coordinates if available; otherwise based on current mesh position)
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
@@ -353,9 +368,13 @@ onChildAdded(stickersRef, (snap) => {
 
   // Set at ABSOLUTE world position (fallback)
   const worldPos = gpsToAbsoluteWorldPosition(data.lat, data.lon);
+  const worldY = (data.alt != null) ? data.alt : 0;
+  mesh.userData.world = { x: worldPos.x, y: worldY, z: worldPos.z };
+
+  // Default position (non-XR world coordinates)
   mesh.position.x = worldPos.x;
   mesh.position.z = worldPos.z;
-  mesh.position.y = (data.alt || 0) + 0.02;
+  mesh.position.y = worldY + 0.02;
 
   // Apply saved heading/orientation (and convert to radians)
   if (data.heading != null) {
@@ -389,7 +408,12 @@ onChildAdded(stickersRef, (snap) => {
 
   console.log(`Sticker ${id} LOADED at GPS (${data.lat.toFixed(6)}, ${data.lon.toFixed(6)}) => World (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
 
-  // Try to resolve a visual anchor for this sticker if possible
+  // If XR is active we must compute this sticker's XR-local position as well
+  if (xrSession && userWorldAtXRStart) {
+    setMeshToXRLocal(mesh);
+  }
+
+  // Try to resolve a visual anchor for this sticker if possible (hook)
   tryVisualAnchorSync(id, mesh, data);
 
   updateMapMarkers();
@@ -416,19 +440,13 @@ onChildRemoved(stickersRef, (snap) => {
    Otherwise this remains a hook for future Cloud Anchor resolution.
 */
 function tryVisualAnchorSync(id, mesh, data) {
-  // If the database entry included an anchorTransform (x,y,z + quaternion),
-  // we can use it as a precise transform when in an XR session and gradually lerp to it.
   if (!data.anchorTransform) return;
 
-  // Convert stored anchor transform (world coords) into three.js target
-  // NOTE: anchorTransform should be in world coordinates relative to WORLD_ORIGIN
   const t = data.anchorTransform;
   const tgtPos = new THREE.Vector3(t.position.x, t.position.y, t.position.z);
   const tgtQuat = new THREE.Quaternion(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w);
 
-  // If XR active, set lerp target so mesh will smoothly move to resolved anchor in update loop
   mesh.userData.lerpTarget = { position: tgtPos, quaternion: tgtQuat };
-  // mark anchorResolved true — other devices could store anchor ID to attempt true XR anchor resolution
   const entry = stickerMeshes.get(id);
   if (entry) entry.anchorResolved = true;
 }
@@ -527,13 +545,11 @@ function startRendering() {
   if (isRendering) return;
   isRendering = true;
 
-  // If XR session running, rendering handled by XR animation loop (see startWebXRSession)
+  // If XR session running, rendering handled by XR animation loop
   if (xrSession) {
-    // XR renderer loop will be active already
     return;
   }
 
-  // Non-XR rendering loop (fallback)
   (function animate() {
     if (!isRendering) return;
     nonXrAnimId = requestAnimationFrame(animate);
@@ -618,6 +634,7 @@ saveStickerBtn.addEventListener("click", async () => {
   await enterARMode(true); // place mode
 });
 
+/* ===== Place Sticker Handler (unchanged logic, writes anchorTransform when available) ===== */
 placeStickerBtn.addEventListener("click", async () => {
   if (!pendingStickerImage || !userGPS) {
     arStatus.textContent = "Waiting for GPS...";
@@ -648,13 +665,10 @@ placeStickerBtn.addEventListener("click", async () => {
       sizeMeters: 1.2
     };
 
-    // If we have a lastHitPose from XR, include anchorTransform (world coordinates)
+    // If we have a lastHitPose from XR, include anchorTransform (XR-local coordinates saved)
     if (lastHitPose && xrRefSpace) {
-      // Transform XR pose to app world coordinates (we assume xr space roughly aligns with world origin
-      // For a simple approach, save the hit pose's position/quaternion as anchorTransform.
       const p = lastHitPose.transform.position;
       const o = lastHitPose.transform.orientation;
-      // store as anchorTransform (relative to current device coordinate space)
       stickerData.anchorTransform = {
         position: { x: p.x, y: p.y, z: p.z },
         quaternion: { x: o.x, y: o.y, z: o.z, w: o.w }
@@ -668,8 +682,8 @@ placeStickerBtn.addEventListener("click", async () => {
     // Reset
     pendingStickerImage = null;
     arStatus.textContent = `Placed at (${userGPS.lat.toFixed(6)}, ${userGPS.lon.toFixed(6)})`;
-    // Hide place button and stop placing state
     placeStickerBtn.style.display = "none";
+    runningPlaceMode = false;
   } catch (e) {
     console.error("Failed to place sticker:", e);
     arStatus.textContent = "Failed to place sticker";
@@ -691,10 +705,14 @@ async function startWebXRSession() {
   }
 
   try {
+    // Stop non-XR render loop before taking GL context for XR
+    stopRendering();
+
     xrSession = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test', 'local-floor']
     });
 
+    // Make GL compatible and hand session to three
     const gl = renderer.getContext();
     await gl.makeXRCompatible();
     renderer.xr.enabled = true;
@@ -704,29 +722,46 @@ async function startWebXRSession() {
     xrViewerSpace = await xrSession.requestReferenceSpace('viewer');
     xrHitTestSource = await xrSession.requestHitTestSource({ space: xrViewerSpace });
 
+    // Record user's current world coords at XR start so we can convert stickers into XR-local coords
+    if (userGPS) {
+      const w = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
+      userWorldAtXRStart = { x: w.x, y: userGPS.alt || 0, z: w.z };
+    } else {
+      // If GPS not available at XR start, we attempt to get one (non-blocking)
+      try {
+        const coords = await getCurrentGPS();
+        userGPS = { lat: coords.latitude, lon: coords.longitude, alt: coords.altitude || 0, accuracy: coords.accuracy };
+        const w = gpsToAbsoluteWorldPosition(userGPS.lat, userGPS.lon);
+        userWorldAtXRStart = { x: w.x, y: userGPS.alt || 0, z: w.z };
+      } catch (e) {
+        // no GPS — assume origin (0,0)
+        userWorldAtXRStart = { x: 0, y: 0, z: 0 };
+      }
+    }
+
+    // Convert all existing meshes into XR-local coordinates
+    stickerMeshes.forEach((entry) => {
+      setMeshToXRLocal(entry.mesh);
+    });
+
     xrSession.addEventListener('end', () => {
+      // cleanup
+      // Restore meshes to world coords so non-XR view matches map/GPS
+      stickerMeshes.forEach((entry) => restoreMeshToWorld(entry.mesh));
+
       xrSession = null;
       xrRefSpace = null;
       xrHitTestSource = null;
       lastHitPose = null;
+      userWorldAtXRStart = null;
       renderer.xr.enabled = false;
-      // restart non-XR rendering loop if needed
-      if (!isRendering) startRendering();
+      // restore non-XR rendering
+      startRendering();
     });
 
-    // XR animation loop
+    // XR animation loop: called by three.js when session active
     renderer.setAnimationLoop((time, frame) => {
-      if (!frame) return;
-      const session = frame.session;
-
-      // update device pose and camera from XR pose
-      const pose = frame.getViewerPose(xrRefSpace);
-      if (pose) {
-        const view = pose.views[0];
-        const viewMatrix = new THREE.Matrix4().fromArray(view.transform.inverse.matrix);
-        // Transform camera from XR pose
-        // In WebXR, the renderer will handle camera pose; still, we can use hit-test below.
-      }
+      if (!frame || !xrRefSpace) return;
 
       // Hit-test: look for a plane in front of camera
       if (xrHitTestSource) {
@@ -736,18 +771,20 @@ async function startWebXRSession() {
           const hitPose = hit.getPose(xrRefSpace);
           if (hitPose) {
             lastHitPose = hitPose;
-            // Optionally show a small preview reticle at the hit pose.
-            // Convert pose position to world coordinates and update a preview target for placing objects.
-            // We'll set camera/preview behavior via a DOM reticle for user clarity.
-            // No DOM reticle movement here; keep lastHitPose used when placing.
+            // Optionally we could update a preview mesh here.
+            // We'll keep the DOM reticle at center; placement uses lastHitPose when tapping Place.
+          } else {
+            lastHitPose = null;
           }
         } else {
           lastHitPose = null;
         }
       }
 
-      // render scene (camera pose provided by WebXR)
-      updateStickerVisibility(); // still update visibility and lerp targets
+      // Update sticker visibility & smooth transitions
+      updateStickerVisibility();
+
+      // Render (three will use XR camera internally)
       renderer.render(scene, camera);
     });
 
@@ -768,18 +805,50 @@ async function endWebXRSession() {
   } catch (e) {
     console.warn("Failed to end XR session:", e);
   } finally {
+    // also restore meshes to world coords
+    stickerMeshes.forEach((entry) => restoreMeshToWorld(entry.mesh));
     xrSession = null;
     xrRefSpace = null;
     xrHitTestSource = null;
     lastHitPose = null;
     renderer.setAnimationLoop(null);
+    renderer.xr.enabled = false;
   }
+}
+
+/* ===== Utility: set mesh to XR-local coordinates based on userWorldAtXRStart ===== */
+function setMeshToXRLocal(mesh) {
+  if (!mesh.userData.world || !userWorldAtXRStart) return;
+
+  // sticker world coordinates
+  const w = mesh.userData.world;
+  // XR-local: stickerWorld - userWorldAtXRStart
+  const localX = w.x - userWorldAtXRStart.x;
+  const localY = w.y - userWorldAtXRStart.y;
+  const localZ = w.z - userWorldAtXRStart.z;
+
+  // Save computed local position for future (so we can toggle back)
+  mesh.userData.xrlocal = { x: localX, y: localY, z: localZ };
+
+  // Apply immediately so the mesh appears in correct place in XR
+  mesh.position.set(localX, localY + 0.02, localZ);
+  mesh.updateMatrix();
+}
+
+/* ===== Utility: restore mesh to world coordinates when XR ends ===== */
+function restoreMeshToWorld(mesh) {
+  if (!mesh.userData.world) return;
+  mesh.position.set(mesh.userData.world.x, mesh.userData.world.y + 0.02, mesh.userData.world.z);
+  mesh.updateMatrix();
+  mesh.userData.xrlocal = null;
 }
 
 /* ===== ENTER/EXIT AR MODE (integrated WebXR + GPS fallback) ===== */
 async function enterARMode(placingSticker = false) {
   showPage("ar");
+  runningPlaceMode = placingSticker;
   arStatus.textContent = "Starting AR...";
+
   // Request orientation permissions on iOS (handled in startOrientationTracking)
   try {
     if (typeof DeviceMotionEvent !== "undefined" &&
@@ -822,7 +891,7 @@ async function enterARMode(placingSticker = false) {
     // proceed anyway — XR might still run
   }
 
-  // Start GPS watch & orientation tracking (orientation used by XR + fallback camera)
+  // Start GPS watch & orientation tracking
   startGPSWatch();
   startOrientationTracking();
 
@@ -841,11 +910,22 @@ async function enterARMode(placingSticker = false) {
   if (!xrStarted) {
     // fallback: start non-XR rendering + rely on GPS
     startRendering();
-    arStatus.textContent = placingSticker ? "No WebXR — placing at GPS location" : "No WebXR — exploring (GPS fallback)";
+    if (placingSticker) {
+      // If no WebXR and placing, we still show place button — storing GPS location instead of hit-test anchor
+      placeStickerBtn.style.display = "";
+      arStatus.textContent = "WebXR not available — placing will use GPS location";
+    } else {
+      arStatus.textContent = "WebXR not available — using GPS fallback";
+    }
   } else {
-    // XR session rendering is active; ensure flag and UI are consistent
-    isRendering = true;
-    arStatus.textContent = placingSticker ? "WebXR ready — pan and tap Place" : "WebXR ready — exploring";
+    // XR session rendering is active; ensure UI is consistent
+    if (placingSticker) {
+      placeStickerBtn.style.display = "";
+      arStatus.textContent = "WebXR ready — pan and tap Place Here";
+    } else {
+      placeStickerBtn.style.display = "none";
+      arStatus.textContent = "WebXR ready — exploring";
+    }
   }
 }
 
@@ -853,17 +933,28 @@ async function enterARMode(placingSticker = false) {
 async function exitARMode() {
   // Hide place button
   placeStickerBtn.style.display = "none";
-  // Stop XR session if active
+  runningPlaceMode = false;
+
+  // End XR session if active
   if (xrSession) {
     await endWebXRSession();
+  } else {
+    // if not in XR, just stop the non-XR loop
+    stopRendering();
   }
-  stopRendering();
+
+  // stop camera, gps, orientation tracking
   stopCamera();
   stopGPSWatch();
   stopOrientationTracking();
+
+  // Ensure meshes are restored to world coords
+  stickerMeshes.forEach((entry) => restoreMeshToWorld(entry.mesh));
+
   showPage("home");
   arStatus.textContent = "";
 }
+
 exitArBtn.addEventListener("click", exitARMode);
 
 /* ===== WINDOW RESIZE ===== */
@@ -880,6 +971,10 @@ window.addEventListener("resize", () => {
     const data = snapshot.val();
     if (data) {
       allStickerData = Object.entries(data).map(([id, val]) => ({ id, ...val }));
+      // create local meshes for them - onChildAdded listeners will also handle new ones
+      allStickerData.forEach(d => {
+        // onChildAdded will add them, but we might have them cached already; ensure no duplicates
+      });
     }
   } catch (e) {
     console.warn("Could not fetch initial stickers:", e);
