@@ -1,588 +1,492 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="theme-color" content="#000000" />
-  <title>Street Stickers AR</title>
-  
-  <!-- Leaflet CSS -->
+  <title>Street Stickers AR — AR.js + Firebase</title>
+
+  <!-- A-Frame + AR.js (GPS) -->
+  <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+  <!-- AR.js (A-Frame build with GPS components) -->
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.js"></script>
+
+  <!-- Leaflet CSS + JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Firebase (keep same major version as your original) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+    import { getDatabase, ref, push, onChildAdded, onChildRemoved, get } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
+
+    // Expose firebase helpers to the page by attaching to window.firebaseApp
+    window._firebase = { initializeApp, getDatabase, ref, push, onChildAdded, onChildRemoved, get, initializeApp, getDatabase, ref };
+
+    // IMPORTANT: we cannot initialize here because this script is a module and other inline scripts need the firebase API.
+    // We'll initialize later in the main non-module script using the same firebaseConfig you provided.
+  </script>
+
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    
-    html, body {
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-      background: #000 url('./images/background.jpg') center/cover no-repeat fixed;
-      font-family: 'Impact', 'Arial Black', sans-serif;
-      color: #fff;
-    }
-
-    /* ===== PAGES ===== */
-    .page {
-      position: fixed;
-      inset: 0;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      background: url('./images/background.jpg') center/cover no-repeat fixed;
-    }
-    
-    .page.active {
-      display: flex;
-    }
-
-    /* ===== HOME PAGE - SPRAY CAN DESIGN ===== */
-    #homePage {
-      background: url('./images/background.jpg') center/cover no-repeat fixed;
-      justify-content: flex-start;
-      padding-top: 40px;
-    }
-
-    .logo-container {
-      width: 90%;
-      max-width: 350px;
-      margin-bottom: 30px;
-    }
-
-    .logo-container img {
-      width: 100%;
-      height: auto;
-      filter: drop-shadow(0 0 20px rgba(255, 255, 0, 0.4));
-    }
-
-    .spray-can-container {
-      position: relative;
-      width: 280px;
-      height: 520px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .spray-can-image {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      z-index: 1;
-      filter: drop-shadow(0 10px 30px rgba(0, 0, 0, 0.7));
-    }
-
-    .home-buttons {
-      position: relative;
-      z-index: 2;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      align-items: center;
-      margin-top: -30px;
-    }
-
-    .home-btn {
-      background: #000;
-      color: #fff;
-      border: none;
-      width: 120px;
-      height: 120px;
-      border-radius: 50%;
-      font-size: 16px;
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      cursor: pointer;
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
-      transform: rotate(-2deg);
-      transition: all 0.2s;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .home-btn:nth-child(2) {
-      transform: rotate(1deg);
-    }
-
-    .home-btn:nth-child(3) {
-      transform: rotate(-1.5deg);
-    }
-
-    .home-btn:nth-child(4) {
-      transform: rotate(0.5deg);
-    }
-
-    .home-btn:hover {
-      transform: scale(1.05) rotate(0deg);
-      box-shadow: 0 8px 30px rgba(118, 255, 3, 0.6);
-      background: #111;
-    }
-
-    .home-btn:active {
-      transform: scale(0.95);
-    }
-
-    /* ===== DRAW PAGE ===== */
-    #drawPage {
-      background: url('./images/background.jpg') center/cover no-repeat fixed;
-      justify-content: flex-start;
-      padding-top: 60px;
-    }
-
-    #drawCanvas {
-      width: 90vw;
-      max-width: 400px;
-      height: 90vw;
-      max-height: 400px;
-      background: #fff;
-      border-radius: 20px;
-      box-shadow: 0 10px 40px rgba(255, 235, 59, 0.3);
-      touch-action: none;
-      cursor: crosshair;
-      border: 4px solid #FFEB3B;
-    }
-
-    .draw-controls {
-      display: flex;
-      gap: 15px;
-      align-items: center;
-      margin: 20px 0;
-      padding: 15px 20px;
-      background: rgba(255, 235, 59, 0.1);
-      border-radius: 15px;
-      backdrop-filter: blur(10px);
-      border: 2px solid rgba(118, 255, 3, 0.3);
-    }
-
-    .draw-controls label {
-      font-size: 14px;
-      color: #FFEB3B;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    input[type="color"] {
-      width: 50px;
-      height: 50px;
-      border: 3px solid #76FF03;
-      border-radius: 10px;
-      cursor: pointer;
-      background: transparent;
-    }
-
-    input[type="range"] {
-      width: 120px;
-      -webkit-appearance: none;
-      background: transparent;
-    }
-
-    input[type="range"]::-webkit-slider-track {
-      background: rgba(118, 255, 3, 0.3);
-      height: 6px;
-      border-radius: 3px;
-    }
-
-    input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 20px;
-      height: 20px;
-      background: #76FF03;
-      border-radius: 50%;
-      cursor: pointer;
-      margin-top: -7px;
-    }
-
-    .btn-group {
-      display: flex;
-      gap: 10px;
-      margin-top: 20px;
-    }
-
-    .btn {
-      padding: 14px 28px;
-      border: none;
-      border-radius: 4px;
-      font-size: 16px;
-      font-weight: 900;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-      font-family: 'Impact', sans-serif;
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #FFEB3B 0%, #76FF03 100%);
-      color: #000;
-      box-shadow: 0 4px 15px rgba(255, 235, 59, 0.4);
-    }
-
-    .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(118, 255, 3, 0.6);
-    }
-
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.1);
-      color: #FFEB3B;
-      border: 2px solid rgba(255, 235, 59, 0.5);
-    }
-
-    .btn-secondary:hover {
-      background: rgba(255, 235, 59, 0.2);
-      border-color: #76FF03;
-    }
-
-    .btn-danger {
-      background: linear-gradient(135deg, #ff5252 0%, #c62828 100%);
-      color: #fff;
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      transform: none !important;
-    }
-
-    /* ===== AR PAGE ===== */
-    #arPage {
-      padding: 0;
-      background: transparent;
-    }
-
-    #arPage video, #arPage canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    #arPage video {
-      z-index: 0;
-    }
-
-    #arPage canvas {
-      z-index: 1;
-    }
-
-    .ar-ui {
-      position: fixed;
-      bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      display: flex;
-      gap: 12px;
-      padding: 15px 20px;
-      background: rgba(0, 0, 0, 0.85);
-      border-radius: 6px;
-      backdrop-filter: blur(15px);
-      border: 2px solid rgba(255, 235, 59, 0.3);
-    }
-
-    .ar-status {
-      position: fixed;
-      top: calc(env(safe-area-inset-top, 20px) + 20px);
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      padding: 12px 20px;
-      background: rgba(0, 0, 0, 0.85);
-      border-radius: 6px;
-      backdrop-filter: blur(15px);
-      font-size: 14px;
-      max-width: 90vw;
-      text-align: center;
-      color: #FFEB3B;
-      border: 2px solid rgba(118, 255, 3, 0.3);
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      font-weight: 900;
-    }
-
-    .sticker-info {
-      position: fixed;
-      top: calc(env(safe-area-inset-top, 20px) + 90px);
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 10;
-      padding: 10px 15px;
-      background: rgba(0, 0, 0, 0.85);
-      border-radius: 6px;
-      backdrop-filter: blur(10px);
-      font-size: 12px;
-      text-align: center;
-      border: 2px solid rgba(118, 255, 3, 0.3);
-      color: #FFEB3B;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      min-width: 100px;
-    }
-
-    .sticker-count {
-      color: #76FF03;
-      font-weight: 900;
-      font-size: 24px;
-    }
-
-    /* ===== RETICLE ===== */
-    .reticle {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 40px;
-      height: 40px;
-      border: 3px solid #76FF03;
-      border-radius: 50%;
-      z-index: 5;
-      pointer-events: none;
-      box-shadow: 0 0 20px rgba(118, 255, 3, 0.6);
-    }
-
-    .reticle::before {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 8px;
-      height: 8px;
-      background: #FFEB3B;
-      border-radius: 50%;
-    }
-
-    /* ===== MAP PAGE - CANVAS STYLE ===== */
-    #mapPage {
-      padding: 0;
-      background: url('./images/background.jpg') center/cover no-repeat fixed;
-    }
-
-    #map {
-      width: 100%;
-      height: 100%;
-      z-index: 1;
-    }
-
-    .map-overlay {
-      position: fixed;
-      top: calc(env(safe-area-inset-top, 20px) + 20px);
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 100;
-      padding: 12px 20px;
-      background: rgba(0, 0, 0, 0.9);
-      border-radius: 6px;
-      backdrop-filter: blur(15px);
-      font-size: 18px;
-      color: #FFEB3B;
-      border: 2px solid #76FF03;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-      font-weight: 900;
-    }
-
-    .map-ui {
-      position: fixed;
-      bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 100;
-      display: flex;
-      gap: 12px;
-      padding: 15px 20px;
-      background: rgba(0, 0, 0, 0.9);
-      border-radius: 6px;
-      backdrop-filter: blur(15px);
-      border: 2px solid rgba(255, 235, 59, 0.3);
-    }
-
-    /* Hide Leaflet controls */
-    .leaflet-control-attribution,
-    .leaflet-control-zoom {
-      display: none !important;
-    }
-
-    /* Minimal canvas-style map - white land, minimal details */
-    .leaflet-tile-pane {
-      filter: grayscale(1) brightness(200%) contrast(80%);
-      opacity: 0.95;
-    }
-
-    /* Remove sticker color filter - keep them colored */
-    .sticker-marker-custom {
-      width: 50px !important;
-      height: 50px !important;
-      border: none !important;
-      background: none !important;
-      filter: none !important;
-    }
-
-    .sticker-marker-custom img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      filter: drop-shadow(2px 2px 6px rgba(0, 0, 0, 0.7));
-    }
-
-    /* User marker - pin drop style */
-    .user-marker-custom {
-      font-size: 40px;
-      filter: drop-shadow(0 4px 8px rgba(255, 0, 0, 0.8));
-    }
-
-    /* ===== ABOUT PAGE ===== */
-    #aboutPage {
-      background: url('./images/background.jpg') center/cover no-repeat fixed;
-      padding: 40px 20px;
-      overflow-y: auto;
-    }
-
-    .about-content {
-      max-width: 600px;
-      background: rgba(0, 0, 0, 0.85);
-      padding: 30px;
-      border-radius: 6px;
-      border: 3px solid #76FF03;
-    }
-
-    .about-content h2 {
-      color: #FFEB3B;
-      font-size: 32px;
-      margin-bottom: 20px;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-    }
-
-    .about-content p {
-      color: #fff;
-      font-size: 16px;
-      line-height: 1.8;
-      margin-bottom: 15px;
-      font-family: Arial, sans-serif;
-    }
-
-    .about-content .highlight {
-      color: #76FF03;
-      font-weight: bold;
-    }
+    html, body { height:100%; width:100%; background:#040404; color:#fff; font-family: Inter, system-ui, Arial; overflow:hidden; }
+    /* Simple layout: pages stacked, we toggle .active */
+    .page { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:18px; }
+    .page.active { display:flex; }
+    /* Home */
+    #homePage { flex-direction:column; gap:18px; }
+    .btn { background:#111; color:#fff; border:2px solid rgba(255,255,255,0.06); padding:14px 22px; border-radius:10px; font-weight:700; cursor:pointer; }
+    .btn.secondary { background:transparent; border:2px solid #666; }
+    /* Draw page */
+    #drawCanvas { background:#fff; border-radius:12px; width:86vw; max-width:420px; height:86vw; max-height:420px; touch-action:none; display:block; }
+    .controls { margin-top:12px; display:flex; gap:10px; align-items:center; }
+    /* Map page */
+    #map { width:100%; height:100%; }
+    /* AR page (A-Frame fills page) */
+    #arPage { padding:0; }
+    .ui-overlay { position:fixed; z-index:9999; left:50%; transform:translateX(-50%); bottom:18px; display:flex; gap:8px; }
+    .top-status { position:fixed; left:50%; transform:translateX(-50%); top:18px; padding:8px 12px; background:rgba(0,0,0,0.6); border-radius:8px; font-size:14px; }
+    .reticle { pointer-events:none; position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:40px; height:40px; border:2px solid #7fff6f; border-radius:50%; box-shadow:0 0 18px rgba(127,255,111,0.25); }
   </style>
 </head>
 <body>
-  <!-- HOME PAGE - SPRAY CAN DESIGN -->
+
+  <!-- HOME -->
   <div id="homePage" class="page active">
-    <div class="logo-container">
-      <img src="./images/logo.png" alt="Logo" />
+    <h1 style="font-size:36px;margin-bottom:6px;">Surfaceless NYC</h1>
+    <p style="max-width:420px; text-align:center; color:#ddd;">Create stickers and place them at real lat/long. Everyone sees them at the same spot — no device-to-device comms required.</p>
+    <div style="display:flex; gap:12px; margin-top:18px;">
+      <button id="createStickerBtn" class="btn">Create</button>
+      <button id="exploreBtn" class="btn secondary">Explore (AR)</button>
+      <button id="mapBtn" class="btn secondary">Map</button>
     </div>
-    
-    <div class="spray-can-container">
-      <img src="./images/can.png" alt="Spray Can" class="spray-can-image" />
-      
-      <div class="home-buttons">
-        <button id="createStickerBtn" class="home-btn">Create</button>
-        <button id="exploreBtn" class="home-btn">Explore</button>
-        <button id="mapBtn" class="home-btn">Map</button>
-        <button id="aboutBtn" class="home-btn">About</button>
+  </div>
+
+  <!-- DRAW -->
+  <div id="drawPage" class="page">
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <canvas id="drawCanvas" width="512" height="512"></canvas>
+      <div class="controls">
+        <label style="color:#fff;">Color</label>
+        <input id="colorPicker" type="color" value="#FF1493"/>
+        <label style="color:#fff;">Size</label>
+        <input id="sizeRange" type="range" min="2" max="40" value="8"/>
+        <button id="clearDrawBtn" class="btn secondary">Clear</button>
+      </div>
+      <div style="margin-top:12px;">
+        <button id="saveStickerBtn" class="btn">Save & Place</button>
+        <button id="backToHomeBtn" class="btn secondary">Back</button>
       </div>
     </div>
   </div>
 
-  <!-- ABOUT PAGE -->
-  <div id="aboutPage" class="page">
-    <div class="about-content">
-      <h2>About Surfaceless NYC</h2>
-      <p>
-        <span class="highlight">Surfaceless</span> is a GPS-anchored AR graffiti app that turns New York City into your canvas.
-      </p>
-      <p>
-        Create digital stickers and place them at <span class="highlight">real-world locations</span>. Your art stays exactly where you left it - visible to anyone who visits that spot.
-      </p>
-      <p>
-        Walk through the city and <span class="highlight">discover other artists' work</span> anchored to streets, parks, and landmarks. Each sticker is permanently tied to its GPS coordinates.
-      </p>
-      <p>
-        <span class="highlight">How it works:</span>
-      </p>
-      <p>
-        1. Draw your sticker<br/>
-        2. Walk to a location<br/>
-        3. Place it in AR<br/>
-        4. Your art lives there forever
-      </p>
-      <p>
-        Transform the streets. Leave your mark. <span class="highlight">Bomb the city digitally.</span>
-      </p>
-    </div>
-    
-    <div class="btn-group" style="margin-top: 20px;">
-      <button id="backFromAboutBtn" class="btn btn-secondary">Back</button>
-    </div>
-  </div>
-
-  <!-- MAP PAGE - CANVAS STYLE -->
+  <!-- MAP -->
   <div id="mapPage" class="page">
     <div id="map"></div>
-    <div class="map-overlay">Sticker Canvas</div>
-    <div class="map-ui">
-      <button id="backFromMapBtn" class="btn btn-secondary">Back</button>
+    <div style="position:fixed;left:12px;top:12px;z-index:1000;">
+      <button id="backFromMapBtn" class="btn secondary">Back</button>
     </div>
   </div>
 
-  <!-- DRAW PAGE -->
-  <div id="drawPage" class="page">
-    <canvas id="drawCanvas" width="512" height="512"></canvas>
-    
-    <div class="draw-controls">
-      <label>Color:</label>
-      <input id="colorPicker" type="color" value="#FF1493" />
-      
-      <label>Size:</label>
-      <input id="sizeRange" type="range" min="2" max="40" value="8" />
-    </div>
-
-    <div class="btn-group">
-      <button id="clearDrawBtn" class="btn btn-secondary">Clear</button>
-      <button id="saveStickerBtn" class="btn btn-primary">Save & Place</button>
-    </div>
-    
-    <div class="btn-group" style="margin-top: 10px;">
-      <button id="backToHomeBtn" class="btn btn-secondary">Back</button>
-    </div>
-  </div>
-
-  <!-- AR PAGE -->
+  <!-- AR (A-Frame + AR.js) -->
   <div id="arPage" class="page">
-    <video id="arVideo" autoplay playsinline muted></video>
-    <canvas id="three-canvas"></canvas>
-    
+    <!-- A-Frame scene with AR.js attribute: arjs with gps -->
+    <a-scene vr-mode-ui="enabled: false" embedded arjs="sourceType: webcam; debugUIEnabled: false;" renderer="logarithmicDepthBuffer: true;">
+      <!-- AR camera that includes GPS component -->
+      <a-entity camera gps-camera rotation-reader></a-entity>
+
+      <!-- stickers will be appended as <a-image gps-entity-place ...> elements via JS -->
+    </a-scene>
+
     <div class="reticle"></div>
-    
-    <div class="ar-status" id="arStatus">Initializing AR...</div>
-    
-    <div class="sticker-info">
-      <div>Nearby:</div>
-      <div class="sticker-count" id="stickerCount">0</div>
-    </div>
-    
-    <div class="ar-ui">
-      <button id="placeStickerBtn" class="btn btn-primary" style="display:none;">Place Here</button>
-      <button id="exitArBtn" class="btn btn-danger">Exit</button>
+    <div class="top-status" id="arStatus">Initializing AR...</div>
+
+    <div class="ui-overlay">
+      <button id="placeStickerBtn" class="btn" style="display:none;">Place Here</button>
+      <button id="exitArBtn" class="btn secondary">Exit</button>
     </div>
   </div>
 
-  <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  
-  <!-- Three.js -->
-  <script type="module" src="./main.js"></script>
+  <!-- SCRIPTS: non-module so firebase config can be used directly -->
+  <script>
+  // ---------- FIREBASE INITIALIZATION (kept exactly as you provided) ----------
+  // using non-module Firebase CDN via dynamic import helper (we already imported module but to keep compatibility we re-init via module dynamic import)
+  (async function initFirebase() {
+    // Use module imports we attached earlier if available
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js');
+    const { getDatabase, ref, push, onChildAdded, onChildRemoved, get } = await import('https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js');
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBCzRpUX5mexhGj5FzqEWKoFAdljNJdbHE",
+      authDomain: "surfaceless-firebase.firebaseapp.com",
+      databaseURL: "https://surfaceless-firebase-default-rtdb.firebaseio.com",
+      projectId: "surfaceless-firebase",
+      storageBucket: "surfaceless-firebase.firebasestorage.app",
+      messagingSenderId: "91893983357",
+      appId: "1:91893983357:web:a823ba9f5874bede8b6914"
+    };
+
+    window._fb = {};
+    window._fb.app = initializeApp(firebaseConfig);
+    window._fb.db = getDatabase(window._fb.app);
+    window._fb.stickersRef = ref(window._fb.db, 'stickers');
+
+    // expose push/get/onChildAdded etc
+    window._fb.push = push;
+    window._fb.onChildAdded = onChildAdded;
+    window._fb.onChildRemoved = onChildRemoved;
+    window._fb.get = get;
+
+    // After firebase is ready, initialize app logic
+    mainInit();
+  })();
+
+  // ---------- APP UI & CORE ----------
+  function mainInit() {
+    // DOM
+    const homePage = document.getElementById('homePage');
+    const drawPage = document.getElementById('drawPage');
+    const arPage = document.getElementById('arPage');
+    const mapPage = document.getElementById('mapPage');
+
+    const createStickerBtn = document.getElementById('createStickerBtn');
+    const exploreBtn = document.getElementById('exploreBtn');
+    const mapBtn = document.getElementById('mapBtn');
+
+    const drawCanvas = document.getElementById('drawCanvas');
+    const colorPicker = document.getElementById('colorPicker');
+    const sizeRange = document.getElementById('sizeRange');
+    const clearDrawBtn = document.getElementById('clearDrawBtn');
+    const saveStickerBtn = document.getElementById('saveStickerBtn');
+    const backToHomeBtn = document.getElementById('backToHomeBtn');
+
+    const placeStickerBtn = document.getElementById('placeStickerBtn');
+    const exitArBtn = document.getElementById('exitArBtn');
+    const arStatus = document.getElementById('arStatus');
+
+    const backFromMapBtn = document.getElementById('backFromMapBtn');
+
+    // state
+    let pendingStickerImage = null;
+    let userCoords = null; // {lat, lon, alt, accuracy}
+    let lastCompass = null;
+    let lastQuat = null;
+
+    function showPage(page) {
+      [homePage, drawPage, arPage, mapPage].forEach(p => p.classList.remove('active'));
+      if (page === 'home') homePage.classList.add('active');
+      if (page === 'draw') drawPage.classList.add('active');
+      if (page === 'ar') arPage.classList.add('active');
+      if (page === 'map') mapPage.classList.add('active');
+    }
+
+    // drawing setup
+    const ctx = drawCanvas.getContext('2d');
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = colorPicker.value;
+    ctx.lineWidth = sizeRange.value;
+
+    let drawing = false;
+    function toCanvasPos(e) {
+      const rect = drawCanvas.getBoundingClientRect();
+      const x = (e.clientX ?? e.touches?.[0]?.clientX) - rect.left;
+      const y = (e.clientY ?? e.touches?.[0]?.clientY) - rect.top;
+      return { x: x * (drawCanvas.width / rect.width), y: y * (drawCanvas.height / rect.height) };
+    }
+    drawCanvas.addEventListener('pointerdown', (e) => {
+      drawing = true;
+      ctx.strokeStyle = colorPicker.value;
+      ctx.lineWidth = sizeRange.value;
+      const p = toCanvasPos(e);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y);
+    });
+    drawCanvas.addEventListener('pointermove', (e) => {
+      if (!drawing) return;
+      const p = toCanvasPos(e);
+      ctx.lineTo(p.x, p.y); ctx.stroke();
+    });
+    drawCanvas.addEventListener('pointerup', () => drawing = false);
+    drawCanvas.addEventListener('pointerleave', () => drawing = false);
+    clearDrawBtn.addEventListener('click', () => ctx.clearRect(0,0,drawCanvas.width,drawCanvas.height));
+
+    // page buttons
+    createStickerBtn.addEventListener('click', () => showPage('draw'));
+    backToHomeBtn.addEventListener('click', () => showPage('home'));
+    backFromMapBtn.addEventListener('click', () => showPage('home'));
+
+    // Map init (Leaflet)
+    let leafletMap = null;
+    const mapMarkers = [];
+    async function initMap() {
+      if (!leafletMap) {
+        // try to get user location
+        try {
+          const coords = await getCurrentPosition();
+          userCoords = coords;
+        } catch(e){ console.warn('Map: no gps yet'); }
+        leafletMap = L.map('map', { zoomControl: true }).setView([userCoords?.lat ?? 40.7589, userCoords?.lon ?? -73.9851], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(leafletMap);
+      }
+      // clear
+      mapMarkers.forEach(m => leafletMap.removeLayer(m)); mapMarkers.length = 0;
+      // add markers from DB (cached allStickerData)
+      try {
+        const snapshot = await window._fb.get(window._fb.stickersRef);
+        const data = snapshot.val();
+        if (!data) return;
+        Object.entries(data).forEach(([id, item]) => {
+          const m = L.marker([item.lat, item.lon]).addTo(leafletMap);
+          m.bindPopup(`<div style="width:160px"><img src="${item.image}" style="width:100%;height:auto;border-radius:8px;"/><div style="font-size:12px;margin-top:6px">Placed: ${new Date(item.createdAt).toLocaleString()}</div></div>`);
+          mapMarkers.push(m);
+        });
+      } catch(e) { console.warn('Map load err',e); }
+    }
+
+    mapBtn.addEventListener('click', () => { showPage('map'); setTimeout(initMap, 120); });
+
+    // utility: get current position (promise)
+    function getCurrentPosition() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error('No geolocation'));
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, alt: p.coords.altitude ?? 0, accuracy: p.coords.accuracy }),
+          reject,
+          { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+        );
+      });
+    }
+
+    // device orientation capture (heading + quaternion)
+    window.addEventListener('deviceorientation', (ev) => {
+      // alpha = rotation around z axis (0..360), many browsers it's relative to north when absolute true
+      if (ev.alpha !== null) lastCompass = ev.alpha;
+      // capture quaternion from alpha/beta/gamma using same transform AR.js uses
+      // simpler: store angles for saving; we will also store orientation quaternion calculated by THREE
+      // Build quaternion using THREE (we have aframe/three loaded)
+      try {
+        const threeEuler = new THREE.Euler(
+          (ev.beta ?? 0) * Math.PI/180,
+          (ev.alpha ?? 0) * Math.PI/180,
+          -(ev.gamma ?? 0) * Math.PI/180,
+          'YXZ'
+        );
+        const q = new THREE.Quaternion().setFromEuler(threeEuler);
+        lastQuat = { _x: q.x, _y: q.y, _z: q.z, _w: q.w };
+      } catch(e){}
+    }, true);
+
+    // Save sticker -> push to firebase (image dataURL + gps + heading + quaternion snapshot)
+    saveStickerBtn.addEventListener('click', async () => {
+      // make dataURL
+      pendingStickerImage = drawCanvas.toDataURL('image/png');
+      // go to AR mode to place it
+      showPage('ar');
+      await startARMode(true);
+    });
+
+    // AR mode helpers (uses AR.js / A-Frame)
+    let arScene = null;
+    let arCameraEntity = null;
+    let arEntities = {}; // id -> entity
+    const MAX_RENDER_DISTANCE = 120; // meters
+
+    // create a-view element handle
+    function ensureARScene() {
+      arScene = document.querySelector('a-scene');
+      if (!arScene) throw new Error('a-scene not found');
+      arCameraEntity = arScene.querySelector('[gps-camera]') || (function(){ const c=document.createElement('a-entity'); c.setAttribute('gps-camera',''); arScene.appendChild(c); return c; })();
+    }
+
+    // create A-Frame image entity at lat/lon with rotation from heading
+    function createStickerEntity(id, item) {
+      // if entity exists, skip
+      if (arEntities[id]) return arEntities[id];
+
+      const a = document.createElement('a-image');
+      a.setAttribute('gps-entity-place', `latitude: ${item.lat}; longitude: ${item.lon};`);
+      a.setAttribute('src', item.image);
+      a.setAttribute('width', item.sizeMeters ?? 1.2);
+      a.setAttribute('height', item.sizeMeters ?? 1.2);
+      // set vertical to horizontal: AR.js places image vertical by default — we want sticker flat on wall or ground?
+      // default: make sticker vertical (like a poster). If you prefer floor decals, rotate -90 on X.
+      const rotY = (item.heading != null) ? item.heading : 0; // degrees
+      // rotate so the image faces the same compass heading it was created with
+      // We set rotation as: rotation = "-90 Y 0" for floor; for vertical poster use "0 Y 0"
+      // We'll use vertical poster here: rotation = "0 rotY 0"
+      a.setAttribute('rotation', `0 ${rotY} 0`);
+      a.setAttribute('look-at', '[gps-camera]'); // optional: make it face camera for readability
+      a.setAttribute('class', 'sticker-entity');
+
+      // hide by default; AR.js will position it later
+      a.style.display = 'none';
+
+      // add to scene
+      arScene.appendChild(a);
+      arEntities[id] = a;
+
+      // once placed by AR.js (gps-entity-place sets object3D.position), show it
+      // Use a small interval to check distance to user and set visibility
+      const checkInterval = setInterval(() => {
+        if (!userCoords) return;
+        const d = haversineDistance(userCoords.lat, userCoords.lon, item.lat, item.lon);
+        // show only within range to avoid clutter and performance problems
+        if (d < MAX_RENDER_DISTANCE) {
+          a.style.display = '';
+        } else {
+          a.style.display = 'none';
+        }
+      }, 1000);
+
+      // Return entity
+      return a;
+    }
+
+    // load stickers from firebase, create entities
+    function startListeningForStickers() {
+      // initial fetch + child_added listener
+      window._fb.onChildAdded(window._fb.stickersRef, (snap) => {
+        const id = snap.key; const data = snap.val();
+        // create entity (if AR scene exists)
+        try { createStickerEntity(id, data); } catch(e){ /* deferred until ar scene ready */ }
+      });
+
+      // removal
+      window._fb.onChildRemoved(window._fb.stickersRef, (snap) => {
+        const id = snap.key;
+        if (arEntities[id]) {
+          arEntities[id].parentNode.removeChild(arEntities[id]);
+          delete arEntities[id];
+        }
+      });
+    }
+
+    // Haversine distance (meters)
+    function haversineDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const toRad = (d) => d * Math.PI/180;
+      const φ1 = toRad(lat1), φ2 = toRad(lat2);
+      const Δφ = toRad(lat2 - lat1), Δλ = toRad(lon2 - lon1);
+      const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    // Place sticker action (when user clicks Place Here)
+    placeStickerBtn.addEventListener('click', async () => {
+      placeStickerBtn.disabled = true;
+      arStatus.innerText = 'Placing sticker...';
+      try {
+        // get fresh gps if possible
+        try { userCoords = await getCurrentPosition(); } catch(e){ /* ignore */ }
+
+        if (!pendingStickerImage || !userCoords) {
+          arStatus.innerText = 'Need GPS & image';
+          placeStickerBtn.disabled = false;
+          return;
+        }
+
+        // build data
+        const data = {
+          image: pendingStickerImage,
+          lat: userCoords.lat,
+          lon: userCoords.lon,
+          alt: userCoords.alt ?? 0,
+          accuracy: userCoords.accuracy ?? 999,
+          owner: localStorage.getItem('ar_stickers_uid') ?? ('user_' + Date.now().toString(36)),
+          createdAt: Date.now(),
+          heading: (lastCompass != null) ? lastCompass : null,
+          orientationQuaternion: lastQuat || { _x:0,_y:0,_z:0,_w:1 },
+          sizeMeters: 1.2
+        };
+
+        // push to Firebase
+        await window._fb.push(window._fb.stickersRef, data);
+        arStatus.innerText = 'Sticker placed!';
+        pendingStickerImage = null;
+        placeStickerBtn.style.display = 'none';
+      } catch (e) {
+        console.error('Place error', e);
+        arStatus.innerText = 'Failed to place sticker';
+        placeStickerBtn.disabled = false;
+      }
+    });
+
+    // Start AR mode: ensure permissions, initialize scene, load stickers
+    async function startARMode(placing = false) {
+      showPage('ar');
+      arStatus.innerText = 'Starting AR...';
+
+      // ensure scene exists
+      ensureARScene();
+
+      // request permissions: camera + geo + orientation
+      try {
+        // geolocation permission handled by getCurrentPosition
+        try { userCoords = await getCurrentPosition(); } catch(e){ console.warn('GPS denied/timeout',e); }
+      } catch(e){ console.warn('GPS err',e); }
+
+      // show Place button if placing
+      if (placing && pendingStickerImage) { placeStickerBtn.style.display = ''; placeStickerBtn.disabled = false; }
+      else placeStickerBtn.style.display = 'none';
+
+      // start listening for stickers from db (creates aframe entities)
+      startListeningForStickers();
+
+      // create existing stickers right away (if any were fetched earlier)
+      try {
+        const snapshot = await window._fb.get(window._fb.stickersRef);
+        const data = snapshot.val();
+        if (data) {
+          Object.entries(data).forEach(([id, item]) => createStickerEntity(id, item));
+        }
+      } catch(e){ console.warn('initial stickers load failed', e); }
+
+      // update UI
+      arStatus.innerText = 'AR ready — move slowly to let GPS & AR.js position items';
+    }
+
+    // Stop AR: remove entities (keeps DB intact)
+    function stopARMode() {
+      // remove sticker elements from scene to free memory
+      Object.keys(arEntities).forEach(id => {
+        try { arEntities[id].parentNode.removeChild(arEntities[id]); } catch(e){}
+      });
+      Object.keys(arEntities).forEach(k => delete arEntities[k]);
+      arStatus.innerText = 'Exited AR';
+    }
+
+    exitArBtn.addEventListener('click', () => {
+      stopARMode();
+      showPage('home');
+    });
+
+    exploreBtn.addEventListener('click', async () => {
+      await startARMode(false);
+    });
+
+    // initial DB listeners for map/home preview (not AR entities)
+    (async function preloadAll() {
+      try {
+        const snapshot = await window._fb.get(window._fb.stickersRef);
+        const data = snapshot.val();
+        // nothing else needed — AR listener will create entities
+      } catch(e){}
+    })();
+
+    // Expose function to be used by initial firebase onChildAdded loaded earlier
+    // but everything is handled via window._fb.onChildAdded inside startListeningForStickers
+
+    // utility: generate unique id (same as original)
+    function getUniqueUserId() {
+      let uid = localStorage.getItem("ar_stickers_uid");
+      if (!uid) {
+        uid = "user_" + Date.now().toString(36) + "_" + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem("ar_stickers_uid", uid);
+      }
+      return uid;
+    }
+  } // end mainInit
+  </script>
+
 </body>
 </html>
